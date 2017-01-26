@@ -14,7 +14,7 @@ np.set_printoptions(formatter={'float_kind': float_formatter})
 # https://github.com/openai/gym/wiki/MountainCar-v0
 #
 env = gym.make('MountainCar-v0')
-env = gym.wrappers.Monitor(env, 'tmp/mountaincar-experiment-1', force=True)
+# env = gym.wrappers.Monitor(env, 'tmp/mountaincar-experiment-1', force=True)
 
 #
 EP_MAX = 1000
@@ -23,7 +23,6 @@ T_MAX = 100
 #
 r_best = None
 params_best = np.zeros(3)
-consecutive_success = 0
 
 
 #
@@ -35,8 +34,11 @@ for ep in range(EP_MAX):
     # noinspection PyRedeclaration
     observation = env.reset()
 
-    if consecutive_success == 0:
-        params = (np.random.random(3) - 0.5) * 10
+    # use only velocity
+    params = np.array([0, 0, 1000])
+
+    # random with bias
+    # params = (np.random.random(3) - 0.5) * 10
 
     print("ep: {}".format(ep))
     print("params: {}".format(params))
@@ -51,7 +53,7 @@ for ep in range(EP_MAX):
         env.render()
 
         k = np.dot(add_bias(observation), params)
-        action = min(max(int(k * 4), 0), 2)
+        action = min(max(int(k), 0), 2)
 
         print("time: {:3d}, observation: {}, action: {}".format(t, observation, action))
 
