@@ -26,13 +26,13 @@ for ep in range(200):
 
     observation = env.reset()
 
-    params = np.random.random(4) * 2 - 1
+    # params = np.random.random(4) * 2 - 1
 
     # params found with this algorithm which sometimes ran 200 timesteps
     # params = np.array([0.134581, -0.831711, 0.888523, 0.221410])
 
     # params found with this algorithm which always(?) ran 200 timesteps
-    # params = np.array([-0.043532, 0.372516, 0.324205, 0.902193])
+    params = np.array([-0.043532, 0.372516, 0.324205, 0.902193])
 
     print("ep: {}".format(ep))
     print("params: {}".format(params))
@@ -52,10 +52,6 @@ for ep in range(200):
         if done:
             print("Episode finished after {} timesteps".format(t))
             time.sleep(1)
-            break
-
-        if t == T_MAX:
-            print("WOW! Episode runs 200 (target) timesteps")
             break
 
     if t > t_best:
