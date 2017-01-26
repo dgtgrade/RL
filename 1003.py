@@ -14,7 +14,7 @@ np.set_printoptions(formatter={'float_kind': float_formatter})
 # https://github.com/openai/gym/wiki/MountainCar-v0
 #
 env = gym.make('MountainCar-v0')
-# env = gym.wrappers.Monitor(env, 'tmp/mountaincar-experiment-1', force=True)
+env = gym.wrappers.Monitor(env, 'tmp/mountaincar-experiment-1', force=True)
 
 #
 EP_MAX = 1000
