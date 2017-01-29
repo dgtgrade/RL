@@ -59,8 +59,8 @@ TF_LOAD_MODEL = True
 env = gym.make('Breakout-v0')
 
 # Check whether an environment is suitable
-assert type(env.action_space) is gym.spaces.discrete.Discrete
-assert type(env.observation_space) is gym.spaces.box.Box
+# assert type(env.action_space) is gym.spaces.discrete.Discrete
+# assert type(env.observation_space) is gym.spaces.box.Box
 assert env.observation_space.shape == (SCREEN_X, SCREEN_Y, SCREEN_Z)
 
 # Build Tensorflow Policy network 
@@ -87,10 +87,10 @@ l_output = tf.nn.softmax(tf.add(tf.matmul(l_hidden_2, w2), b2), name='l_output')
 #
 l_better_output = tf.placeholder(tf.float32, [None, N_OUTPUT], name='l_better_output')
 #
-decays = tf.placeholder(tf.float32, [None], name='decays')
+f_decays = tf.placeholder(tf.float32, [None], name='f_decays')
 #
 cross_entropy = tf.reduce_mean(tf.multiply(
-    decays, -tf.reduce_sum(l_better_output*tf.log(l_output), reduction_indices=[1])), 
+    f_decays, -tf.reduce_sum(l_better_output*tf.log(l_output), reduction_indices=[1])),
     name='decayed_cross_entropy')
 #
 optimize = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE).minimize(cross_entropy)
@@ -100,6 +100,7 @@ saver = tf.train.Saver()
 #
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
+
 
 #
 ckpt = tf.train.get_checkpoint_state(TF_CKPT_DIR)
@@ -114,7 +115,7 @@ def screen_shrink(data, x, y, z):
     return data.reshape(
         x, int(data.shape[0]/x), 
         y, int(data.shape[1]/y), 
-        z, int(data.shape[2]/z)).mean(axis=(1,3,5))
+        z, int(data.shape[2]/z)).mean(axis=(1, 3, 5))
 
 # experiences to remember (limited by memory)
 #
@@ -122,7 +123,8 @@ ex = 0
 ex_observations_0 = np.empty((EX_MAX, N_INPUT_0))
 ex_observations_1 = np.empty((EX_MAX, N_INPUT_1))
 ex_better_actions = np.empty((EX_MAX, N_ACTIONS))
-ex_decays = np.empty((EX_MAX))
+ex_decays = np.empty(EX_MAX)
+
 
 def memorize(observations_0, observations_1, actions, actions_done, well_done):
 
@@ -139,11 +141,13 @@ def memorize(observations_0, observations_1, actions, actions_done, well_done):
     well_sign = 1 if well_done else -1 
     better_actions[actions_done] += well_sign * P_ADJUST
     better_actions[better_actions < 0] = 0
-    better_actions[:, :] *= (1.0 / better_actions.sum(axis=1)).reshape(-1, 1)
+    # noinspection PyTypeChecker
+    better_actions[:, :] *= np.array(
+        1.0 / better_actions.sum(axis=1)).reshape(-1, 1)
 
     # assert np.count_nonzero(np.abs((better_actions.sum(axis=1)) - 1.0) > 0.01) == 0
     # assert np.count_nonzero(better_actions < 0) == 0
-    #assert np.count_nonzero(better_actions > 1) == 0
+    # assert np.count_nonzero(better_actions > 1) == 0
 
     # 
     # print(actions)
@@ -159,6 +163,7 @@ def memorize(observations_0, observations_1, actions, actions_done, well_done):
     ex_decays[ex:ex+m] = decays
     ex += m
 
+
 # 
 def learn():
 
@@ -166,12 +171,13 @@ def learn():
 
     print("learning {} experiences...".format(ex))
     for i in range(LEARN_ITERATIONS):
-        [xe, _] = sess.run([cross_entropy, optimize],
+        [xe, _] = sess.run(
+            [cross_entropy, optimize],
             feed_dict={
-                l_input_0:ex_observations_0[0:ex],
-                l_input_1:ex_observations_1[0:ex],
+                l_input_0: ex_observations_0[0:ex],
+                l_input_1: ex_observations_1[0:ex],
                 l_better_output: ex_better_actions[0:ex],
-                decays: ex_decays[0:ex]})
+                f_decays: ex_decays[0:ex]})
         if i % LEARN_PRINT == 0:
             print("iteration #{:4d}, cross entropy:{:7.5f}".format(i, xe))
 
@@ -193,6 +199,7 @@ for ep in range(EP_MAX):
     ep_actions = np.zeros((T_MAX, N_ACTIONS))  # probability of actions
     ep_actions_done = np.zeros((T_MAX, N_ACTIONS), dtype=np.bool)  # selected actions
 
+    # noinspection PyRedeclaration
     observation = env.reset()
 
     # breakout-specific code
@@ -214,12 +221,15 @@ for ep in range(EP_MAX):
         print("Successfully saved model")
 
     #
+    # noinspection PyRedeclaration
     prev_frame = np.zeros((SCREEN_LOW_X, SCREEN_LOW_Y), dtype=np.bool)
 
     for t in range(T_MAX):
 
-        frame = np.array(screen_shrink(observation, SCREEN_LOW_X, SCREEN_LOW_Y, SCREEN_LOW_Z).mean(axis=2) > 0, 
-            dtype=np.bool)
+        # noinspection PyTypeChecker
+        frame = np.array(screen_shrink(
+            observation, SCREEN_LOW_X, SCREEN_LOW_Y, SCREEN_LOW_Z).mean(axis=2) > 0,
+                         dtype=np.bool)
         frame_diff = frame - prev_frame
         prev_frame = frame
 
@@ -234,15 +244,16 @@ for ep in range(EP_MAX):
             time.sleep(PLAY_T_DELAY)
 
         # 
-        [actions] = sess.run([l_output], 
+        [t_actions] = sess.run(
+            [l_output],
             feed_dict={
-                l_input_0:frame.reshape((1, N_INPUT_0)),
-                l_input_1:frame_diff.reshape((1, N_INPUT_1)),
+                l_input_0: frame.reshape((1, N_INPUT_0)),
+                l_input_1: frame_diff.reshape((1, N_INPUT_1)),
                 l_better_output: np.zeros((1, N_OUTPUT)),
-                decays: np.zeros(1)})
+                f_decays: np.zeros(1)})
 
         #
-        action = np.random.choice(N_OUTPUT, p=actions.reshape((N_ACTIONS)))
+        action = np.random.choice(N_OUTPUT, p=t_actions.reshape(N_ACTIONS))
 
         # breakout-specific
         # breakout game start action
@@ -252,7 +263,7 @@ for ep in range(EP_MAX):
         # save
         ep_observations_0[t, :] = frame
         ep_observations_1[t, :] = frame_diff
-        ep_actions[t, :] = actions
+        ep_actions[t, :] = t_actions
         ep_actions_done[t, :] = False
         ep_actions_done[t, action] = True 
 
@@ -265,12 +276,13 @@ for ep in range(EP_MAX):
         #     t, info, action, reward, ep_reward))
 
         do_memorize = False
+        t_well_done = None
 
         # got reward
         if reward > 0:
             print("memorize * GOOD * experiences (t#{}~t#{})".format(t_memory_start, t))
             do_memorize = True
-            well_done = True
+            t_well_done = True
 
         # check dead or alive
         if lives != info_lives:  # new life
@@ -278,18 +290,18 @@ for ep in range(EP_MAX):
             if t > 0:
                 print("memorize - bad  - experiences (t#{}~t#{})".format(t_memory_start, t))
                 do_memorize = True
-                well_done = False
+                t_well_done = False
             #
             lives = info_lives
 
         if do_memorize:
             memorize(
                 ep_observations_0[t_memory_start:t], ep_observations_1[t_memory_start:t], 
-                ep_actions[t_memory_start:t], ep_actions_done[t_memory_start:t], well_done)
+                ep_actions[t_memory_start:t], ep_actions_done[t_memory_start:t],
+                t_well_done)
             t_memory_start = t + 1
 
         if done or t == T_MAX - 1:
             print("Episode finished for {} rewards at t#{}".format(ep_reward, t))
             print("")
             break
-
