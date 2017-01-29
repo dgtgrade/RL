@@ -38,15 +38,22 @@ EP_MAX = 10000  # max episodes
 EP_PLAY = 10  # play per episodes
 T_MAX = 1000  # max time
 T_SPAN = 50  # experience time span for a reward
-DECAY = 0.97  # reward decay
+DECAY = 0.99  # reward decay
 EX_MAX = T_MAX * EP_PLAY  # max experiences to remember
 LEARNING_RATE = 1e-4
-LEARN_ITERATIONS = 500
+LEARN_ITERATIONS = 100
 LEARN_PRINT = 100
 P_ADJUST = 0.5  # adjusting amount of probability of actions 
+EP_SAVE_MODEL = 10  # save model per episodes
 
 #
+PLAY_RENDER = False
 PLAY_T_DELAY = 0.005
+
+# Tensorflow variabls
+TF_CKPT_DIR = 'ckpt/1004/'
+TF_CKPT_FILE = 'ckpt/1004/model.ckpt'
+TF_LOAD_MODEL = True
 
 #
 env = gym.make('Breakout-v0')
@@ -89,8 +96,17 @@ cross_entropy = tf.reduce_mean(tf.multiply(
 optimize = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE).minimize(cross_entropy)
 #
 #
+saver = tf.train.Saver()
+#
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
+
+#
+ckpt = tf.train.get_checkpoint_state(TF_CKPT_DIR)
+if TF_LOAD_MODEL and ckpt and ckpt.model_checkpoint_path:
+    print("Restoring model...")
+    saver.restore(sess, ckpt.model_checkpoint_path)
+    print("Successfully restored model")
 
 #
 #
@@ -192,6 +208,12 @@ for ep in range(EP_MAX):
         play = False
 
     #
+    if ep > 0 and ep % EP_SAVE_MODEL == 0:
+        print("Saving model...")
+        saver.save(sess, TF_CKPT_FILE)
+        print("Successfully saved model")
+
+    #
     prev_frame = np.zeros((SCREEN_LOW_X, SCREEN_LOW_Y), dtype=np.bool)
 
     for t in range(T_MAX):
@@ -207,7 +229,7 @@ for ep in range(EP_MAX):
         frame = frame.reshape(N_INPUT_0)
         frame_diff = frame_diff.reshape(N_INPUT_1)
 
-        if play:  
+        if play and PLAY_RENDER:  
             env.render()
             time.sleep(PLAY_T_DELAY)
 
