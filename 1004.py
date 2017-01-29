@@ -52,7 +52,7 @@ PLAY_T_DELAY = 0.005
 
 # Tensorflow variabls
 TF_CKPT_DIR = 'ckpt/1004/'
-TF_CKPT_FILE = 'ckpt/1004/model.ckpt'
+TF_CKPT_FILE = 'model.ckpt'
 TF_LOAD_MODEL = True
 
 #
@@ -210,7 +210,7 @@ for ep in range(EP_MAX):
     #
     if ep > 0 and ep % EP_SAVE_MODEL == 0:
         print("Saving model...")
-        saver.save(sess, TF_CKPT_FILE)
+        saver.save(sess, TF_CKPT_DIR + '/' + TF_CKPT_FILE)
         print("Successfully saved model")
 
     #
