@@ -40,11 +40,11 @@ N_OUTPUT = N_ACTIONS
 
 # Trainer specific variables
 EP_MAX = 1000000  # max episodes
-EP_LEARN = 100  # learn per episodes
-T_MAX = 2000  # max time
+EP_LEARN = 10  # learn per episodes
+T_MAX = 3000  # max time
 DECAY = 0.99  # reward decay
 EX_MAX = 3 * T_MAX * EP_LEARN  # max experiences to remember
-LEARNING_RATE = 2e-4
+LEARNING_RATE = 1e-4
 LEARN_ITERATIONS = 50
 LEARN_PRINT = 10
 P_ADJUST = 0.5  # adjusting amount of probability of actions
@@ -241,8 +241,8 @@ for ep in range(EP_MAX):
             print_ep_total_rewards(ep - EP_LEARN, ep)
 
             print("Rewards average history:")
-            for i in range(min(100, int(ep/EP_LEARN))):
-                print_ep_total_rewards(ep - EP_LEARN*(i+1), ep-EP_LEARN*i)
+            for i in range(min(100, int(ep/EP_LEARN)), 0, -1):
+                print_ep_total_rewards(ep - EP_LEARN*i, ep-EP_LEARN*(i-1))
 
             learn()
         play = True
