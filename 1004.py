@@ -15,9 +15,12 @@ SCREEN_Y = 160
 SCREEN_Z = 3
 
 # Breakout environment specific variables
-SCREEN_LOW_X = int(SCREEN_X / 10)
-SCREEN_LOW_Y = int(SCREEN_Y / 10)
+SCREEN_LOW_X = int(SCREEN_X / 5)
+SCREEN_LOW_Y = int(SCREEN_Y / 5)
 SCREEN_LOW_Z = int(SCREEN_Z / 3)
+SCREEN_VERY_LOW_X = int(SCREEN_X / 30)
+SCREEN_VERY_LOW_Y = int(SCREEN_Y / 20)
+SCREEN_VERY_LOW_Z = int(SCREEN_Z / 3)
 #
 # actions
 # 1: start game (maybe ?) or do nothing on playing game
@@ -29,26 +32,27 @@ ACTION_OFFSET = 1
 # Policy network specific variables
 N_INPUT_0 = SCREEN_LOW_X * SCREEN_LOW_Y * SCREEN_LOW_Z  # current frame
 N_INPUT_1 = N_INPUT_0  # current frame - previous frame
-N_HIDDEN_1 = 256
+N_INPUT_2 = SCREEN_VERY_LOW_X * SCREEN_VERY_LOW_Y * SCREEN_VERY_LOW_Z
+N_INPUT_3 = N_INPUT_2
+N_HIDDEN_1 = 512
 N_HIDDEN_2 = 64
 N_OUTPUT = N_ACTIONS 
 
 # Trainer specific variables
-EP_MAX = 10000  # max episodes
-EP_PLAY = 10  # play per episodes
-T_MAX = 1000  # max time
-T_SPAN = 50  # experience time span for a reward
+EP_MAX = 1000000  # max episodes
+EP_LEARN = 100  # learn per episodes
+T_MAX = 2000  # max time
 DECAY = 0.99  # reward decay
-EX_MAX = T_MAX * EP_PLAY  # max experiences to remember
-LEARNING_RATE = 1e-4
-LEARN_ITERATIONS = 100
-LEARN_PRINT = 100
-P_ADJUST = 0.5  # adjusting amount of probability of actions 
-EP_SAVE_MODEL = 10  # save model per episodes
+EX_MAX = 3 * T_MAX * EP_LEARN  # max experiences to remember
+LEARNING_RATE = 2e-4
+LEARN_ITERATIONS = 50
+LEARN_PRINT = 10
+P_ADJUST = 0.5  # adjusting amount of probability of actions
+EP_SAVE_MODEL = EP_LEARN  # save model per episodes
 
 #
 PLAY_RENDER = False
-PLAY_T_DELAY = 0.005
+PLAY_T_DELAY = 0.1
 
 # Tensorflow variabls
 TF_CKPT_DIR = 'ckpt/1004/'
@@ -65,17 +69,24 @@ assert env.observation_space.shape == (SCREEN_X, SCREEN_Y, SCREEN_Z)
 
 # Build Tensorflow Policy network 
 #
-activate = tf.nn.relu
+activate = tf.nn.elu
 mv = 0.2
 #
 l_input_0 = tf.placeholder(tf.float32, [None, N_INPUT_0], name='l_input_0')
 l_input_1 = tf.placeholder(tf.float32, [None, N_INPUT_1], name='l_input_1')
+l_input_2 = tf.placeholder(tf.float32, [None, N_INPUT_2], name='l_input_2')
+l_input_3 = tf.placeholder(tf.float32, [None, N_INPUT_3], name='l_input_3')
+
 #
 w0_0 = tf.Variable(tf.random_uniform([N_INPUT_0, N_HIDDEN_1], minval=-mv, maxval=mv), name='w0_0')
 w0_1 = tf.Variable(tf.random_uniform([N_INPUT_1, N_HIDDEN_1], minval=-mv, maxval=mv), name='w0_1')
+w0_2 = tf.Variable(tf.random_uniform([N_INPUT_2, N_HIDDEN_1], minval=-mv, maxval=mv), name='w0_2')
+w0_3 = tf.Variable(tf.random_uniform([N_INPUT_3, N_HIDDEN_1], minval=-mv, maxval=mv), name='w0_3')
+
 b0 = tf.Variable(tf.zeros([N_HIDDEN_1]), name='b0')
-l_hidden_1 = activate(tf.add(
-    tf.add(tf.matmul(l_input_0, w0_0), tf.matmul(l_input_1, w0_1)), b0), name='l_hidden_1')
+l_hidden_1 = activate(tf.add(tf.add(
+    tf.add(tf.matmul(l_input_0, w0_0), tf.matmul(l_input_1, w0_1)),
+    tf.add(tf.matmul(l_input_2, w0_2), tf.matmul(l_input_3, w0_3))), b0), name='l_hidden_1')
 #
 w1 = tf.Variable(tf.random_uniform([N_HIDDEN_1, N_HIDDEN_2], minval=-mv, maxval=mv), name='w1')
 b1 = tf.Variable(tf.zeros([N_HIDDEN_2]), name='b1')
@@ -109,6 +120,7 @@ if TF_LOAD_MODEL and ckpt and ckpt.model_checkpoint_path:
     saver.restore(sess, ckpt.model_checkpoint_path)
     print("Successfully restored model")
 
+
 #
 #
 def screen_shrink(data, x, y, z):
@@ -122,11 +134,14 @@ def screen_shrink(data, x, y, z):
 ex = 0
 ex_observations_0 = np.empty((EX_MAX, N_INPUT_0))
 ex_observations_1 = np.empty((EX_MAX, N_INPUT_1))
+ex_observations_2 = np.empty((EX_MAX, N_INPUT_2))
+ex_observations_3 = np.empty((EX_MAX, N_INPUT_3))
 ex_better_actions = np.empty((EX_MAX, N_ACTIONS))
 ex_decays = np.empty(EX_MAX)
 
 
-def memorize(observations_0, observations_1, actions, actions_done, well_done):
+def memorize(observations_0, observations_1, observations_2, observations_3,
+             actions, actions_done, reward):
 
     global ex
 
@@ -138,8 +153,7 @@ def memorize(observations_0, observations_1, actions, actions_done, well_done):
 
     better_actions = actions.copy()
 
-    well_sign = 1 if well_done else -1 
-    better_actions[actions_done] += well_sign * P_ADJUST
+    better_actions[actions_done] += reward * P_ADJUST
     better_actions[better_actions < 0] = 0
     # noinspection PyTypeChecker
     better_actions[:, :] *= np.array(
@@ -159,6 +173,8 @@ def memorize(observations_0, observations_1, actions, actions_done, well_done):
     #
     ex_observations_0[ex:ex+m, :] = observations_0
     ex_observations_1[ex:ex+m, :] = observations_1
+    ex_observations_2[ex:ex+m, :] = observations_2
+    ex_observations_3[ex:ex+m, :] = observations_3
     ex_better_actions[ex:ex+m, :] = better_actions
     ex_decays[ex:ex+m] = decays
     ex += m
@@ -170,21 +186,24 @@ def learn():
     global ex
 
     print("learning {} experiences...".format(ex))
+
     for i in range(LEARN_ITERATIONS):
         [xe, _] = sess.run(
             [cross_entropy, optimize],
             feed_dict={
                 l_input_0: ex_observations_0[0:ex],
                 l_input_1: ex_observations_1[0:ex],
+                l_input_2: ex_observations_2[0:ex],
+                l_input_3: ex_observations_3[0:ex],
                 l_better_output: ex_better_actions[0:ex],
                 f_decays: ex_decays[0:ex]})
-        if i % LEARN_PRINT == 0:
+        if i % LEARN_PRINT == 0 or i == LEARN_ITERATIONS - 1:
             print("iteration #{:4d}, cross entropy:{:7.5f}".format(i, xe))
 
     # transfered experiences into brain, forget every past experiences
     ex = 0
 
-
+ep_total_rewards = np.empty(EP_MAX)
 # episodes (or epoch?)
 for ep in range(EP_MAX):
 
@@ -194,8 +213,10 @@ for ep in range(EP_MAX):
     ep_reward = 0
 
     #
-    ep_observations_0 = np.empty((T_MAX, N_INPUT_0), dtype=np.bool)  # Black & White
-    ep_observations_1 = np.empty((T_MAX, N_INPUT_1), dtype=np.bool)
+    ep_observations_0 = np.empty((T_MAX, N_INPUT_0), dtype=np.int8)  # Black & White
+    ep_observations_1 = np.empty((T_MAX, N_INPUT_1), dtype=np.int8)
+    ep_observations_2 = np.empty((T_MAX, N_INPUT_2), dtype=np.int8)
+    ep_observations_3 = np.empty((T_MAX, N_INPUT_3), dtype=np.int8)
     ep_actions = np.zeros((T_MAX, N_ACTIONS))  # probability of actions
     ep_actions_done = np.zeros((T_MAX, N_ACTIONS), dtype=np.bool)  # selected actions
 
@@ -204,11 +225,25 @@ for ep in range(EP_MAX):
 
     # breakout-specific code
     lives = None
+    t_life_start = 0
     t_memory_start = 0
 
     # learn or explore or train and play
-    if ep % EP_PLAY == 0:
+    if ep % EP_LEARN == 0:
         if ep > 0:
+            print("Rewards of previous {} episodes:".format(EP_LEARN))
+
+            def print_ep_total_rewards(ep_start, ep_end):
+                rewards = ep_total_rewards[ep_start:ep_end]
+                print("Ep #{:5d}~#{:5d}: Average: {:5.1f}, Min: {:5.1f}, Max: {:5.1f}".format(
+                    ep_start, ep_end-1, np.mean(rewards), np.min(rewards), np.max(rewards)))
+
+            print_ep_total_rewards(ep - EP_LEARN, ep)
+
+            print("Rewards average history:")
+            for i in range(min(100, int(ep/EP_LEARN))):
+                print_ep_total_rewards(ep - EP_LEARN*(i+1), ep-EP_LEARN*i)
+
             learn()
         play = True
     else:
@@ -222,22 +257,32 @@ for ep in range(EP_MAX):
 
     #
     # noinspection PyRedeclaration
-    prev_frame = np.zeros((SCREEN_LOW_X, SCREEN_LOW_Y), dtype=np.bool)
+    prev_frame_low = np.zeros((SCREEN_LOW_X, SCREEN_LOW_Y), dtype=np.int8)
+    # noinspection PyRedeclaration
+    prev_frame_very_low = np.zeros((SCREEN_VERY_LOW_X, SCREEN_VERY_LOW_Y), dtype=np.int8)
 
     for t in range(T_MAX):
 
         # noinspection PyTypeChecker
-        frame = np.array(screen_shrink(
+        frame_low = np.array(screen_shrink(
             observation, SCREEN_LOW_X, SCREEN_LOW_Y, SCREEN_LOW_Z).mean(axis=2) > 0,
-                         dtype=np.bool)
-        frame_diff = frame - prev_frame
-        prev_frame = frame
+                             dtype=np.int8)
+        frame_low_diff = frame_low - prev_frame_low
+        prev_frame_low = frame_low
+        #
+        frame_very_low = np.array(screen_shrink(
+            observation, SCREEN_VERY_LOW_X, SCREEN_VERY_LOW_Y, SCREEN_VERY_LOW_Z).mean(axis=2) > 0,
+                             dtype=np.int8)
+        frame_very_low_diff = frame_very_low - prev_frame_very_low
+        prev_frame_very_low = frame_very_low
+        #
+        # print(frame_low.astype(np.int))
+        # print(frame_low_diff.astype(np.int))
 
-        # print(frame.astype(np.int))
-        # print(frame_diff.astype(np.int))
-
-        frame = frame.reshape(N_INPUT_0)
-        frame_diff = frame_diff.reshape(N_INPUT_1)
+        frame_low = frame_low.reshape(N_INPUT_0)
+        frame_low_diff = frame_low_diff.reshape(N_INPUT_1)
+        frame_very_low = frame_very_low.reshape(N_INPUT_2)
+        frame_very_low_diff = frame_very_low_diff.reshape(N_INPUT_3)
 
         if play and PLAY_RENDER:  
             env.render()
@@ -247,8 +292,10 @@ for ep in range(EP_MAX):
         [t_actions] = sess.run(
             [l_output],
             feed_dict={
-                l_input_0: frame.reshape((1, N_INPUT_0)),
-                l_input_1: frame_diff.reshape((1, N_INPUT_1)),
+                l_input_0: frame_low.reshape((1, N_INPUT_0)),
+                l_input_1: frame_low_diff.reshape((1, N_INPUT_1)),
+                l_input_2: frame_very_low.reshape((1, N_INPUT_2)),
+                l_input_3: frame_very_low_diff.reshape((1, N_INPUT_3)),
                 l_better_output: np.zeros((1, N_OUTPUT)),
                 f_decays: np.zeros(1)})
 
@@ -261,47 +308,54 @@ for ep in range(EP_MAX):
             action = 0
 
         # save
-        ep_observations_0[t, :] = frame
-        ep_observations_1[t, :] = frame_diff
+        ep_observations_0[t, :] = frame_low
+        ep_observations_1[t, :] = frame_low_diff
+        ep_observations_2[t, :] = frame_very_low
+        ep_observations_3[t, :] = frame_very_low_diff
         ep_actions[t, :] = t_actions
         ep_actions_done[t, :] = False
         ep_actions_done[t, action] = True 
 
         # 
-        observation, reward, done, info = env.step(action + ACTION_OFFSET)
-        ep_reward += reward
+        observation, t_reward, done, info = env.step(action + ACTION_OFFSET)
+        ep_reward += t_reward
         info_lives = info['ale.lives']
         
         # print("time: {:4d}, info: {}, action: {}, reward: {}, episode reward: {}".format(
-        #     t, info, action, reward, ep_reward))
+        #     t, info, action, t_reward, ep_reward))
 
         do_memorize = False
-        t_well_done = None
 
         # got reward
-        if reward > 0:
-            print("memorize * GOOD * experiences (t#{}~t#{})".format(t_memory_start, t))
+        if t_reward > 0:
+            t_reward = int(t_reward)
+            t_start = t_life_start
             do_memorize = True
-            t_well_done = True
 
         # check dead or alive
         if lives != info_lives:  # new life
             #
             if t > 0:
-                print("memorize - bad  - experiences (t#{}~t#{})".format(t_memory_start, t))
+                t_reward = -1
+                t_start = t_memory_start
                 do_memorize = True
-                t_well_done = False
             #
             lives = info_lives
+            t_life_start = t + 1
 
         if do_memorize:
+            t_reward_sign = "+" if t_reward > 0 else "-"
+            print("memorize {} reward: {:+3d} {} experiences (t#{}~t#{})".format(
+                t_reward_sign, t_reward, t_reward_sign, t_start, t))
             memorize(
-                ep_observations_0[t_memory_start:t], ep_observations_1[t_memory_start:t], 
-                ep_actions[t_memory_start:t], ep_actions_done[t_memory_start:t],
-                t_well_done)
+                ep_observations_0[t_start:t], ep_observations_1[t_start:t],
+                ep_observations_2[t_start:t], ep_observations_3[t_start:t],
+                ep_actions[t_start:t], ep_actions_done[t_start:t],
+                t_reward)
             t_memory_start = t + 1
 
         if done or t == T_MAX - 1:
+            ep_total_rewards[ep] = ep_reward
             print("Episode finished for {} rewards at t#{}".format(ep_reward, t))
             print("")
             break
