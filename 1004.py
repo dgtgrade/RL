@@ -45,7 +45,7 @@ T_MAX = 3000  # max time
 DECAY = 0.99  # reward decay
 EX_MAX = 3 * T_MAX * EP_LEARN  # max experiences to remember
 LEARNING_RATE = 1e-4
-LEARN_ITERATIONS = 50
+LEARN_ITERATIONS = 100
 LEARN_PRINT = 10
 P_ADJUST = 0.5  # adjusting amount of probability of actions
 EP_SAVE_MODEL = EP_LEARN  # save model per episodes
@@ -57,7 +57,7 @@ PLAY_T_DELAY = 0.1
 # Tensorflow variabls
 TF_CKPT_DIR = 'ckpt/1004/'
 TF_CKPT_FILE = 'model.ckpt'
-TF_LOAD_MODEL = True
+TF_LOAD_MODEL = False
 
 #
 env = gym.make('Breakout-v0')
@@ -168,7 +168,7 @@ def memorize(observations_0, observations_1, observations_2, observations_3,
     # print(better_actions)
 
     # decays
-    decays = np.array([DECAY ** (t - i) for i in range(m)])
+    decays = np.array([DECAY ** (m - i - 1) for i in range(m)])
 
     #
     ex_observations_0[ex:ex+m, :] = observations_0
