@@ -21,13 +21,14 @@ float_formatter = lambda x: "%+.6f" % x
 np.set_printoptions(formatter={'float_kind': float_formatter})
 
 
+#
 class BreakoutPolicyNetwork:
 
     def __init__(self):
 
         # Tensorflow Policy network
         #
-        activate = tf.nn.elu
+        activate = tf.nn.tanh
         max_v = 0.2
         learning_rate = float(config['Learn']['LEARNING_RATE'])
 
@@ -41,6 +42,29 @@ class BreakoutPolicyNetwork:
         n_output = int(config['Breakout']['ACTION_N'])
 
         #
+        self.training = tf.placeholder(tf.bool)
+
+        #
+        def bn(z, axes, n):
+            mean, var = tf.nn.moments(z, axes=axes)
+            beta = tf.Variable(tf.constant(0.0, shape=[n]))
+            gamma = tf.Variable(tf.constant(1.0, shape=[n]))
+            epsilon = 1e-3
+
+            ema = tf.train.ExponentialMovingAverage(decay=float(config['Learn']['BN_Decay']))
+
+            def mean_var_with_update():
+                ema_apply_op = ema.apply([mean, var])
+                with tf.control_dependencies([ema_apply_op]):
+                    return tf.identity(mean), tf.identity(var)
+
+            mean, var = tf.cond(self.training,
+                                mean_var_with_update,
+                                lambda: (ema.average(mean), ema.average(var)))
+
+            return tf.nn.batch_normalization(z, mean, var, beta, gamma, epsilon)
+
+        #
         self.l_input_0 = tf.placeholder(tf.float32, [None, n_input_0], name='l_input_0')
         self.l_input_1 = tf.placeholder(tf.float32, [None, n_input_1], name='l_input_1')
         self.l_input_2 = tf.placeholder(tf.float32, [None, n_input_2], name='l_input_2')
@@ -51,33 +75,39 @@ class BreakoutPolicyNetwork:
         w0_2 = tf.Variable(tf.random_uniform([n_input_2, n_hidden_1], minval=-max_v, maxval=max_v), name='w0_2')
         w0_3 = tf.Variable(tf.random_uniform([n_input_3, n_hidden_1], minval=-max_v, maxval=max_v), name='w0_3')
         b0 = tf.Variable(tf.zeros([n_hidden_1]), name='b0')
-        l_hidden_1 = activate(tf.add(tf.add(
+        l_hidden_1_z = tf.add(tf.add(
             tf.add(tf.matmul(self.l_input_0, w0_0), tf.matmul(self.l_input_1, w0_1)),
-            tf.add(tf.matmul(self.l_input_2, w0_2), tf.matmul(self.l_input_3, w0_3))), b0), name='l_hidden_1')
+            tf.add(tf.matmul(self.l_input_2, w0_2), tf.matmul(self.l_input_3, w0_3))), b0, name='l_hidden_1_z')
+        l_hidden_1_bn = bn(l_hidden_1_z, [0], n_hidden_1)
+        l_hidden_1 = activate(l_hidden_1_bn, name='l_hidden_1')
         #
         w1 = tf.Variable(tf.random_uniform([n_hidden_1, n_hidden_2], minval=-max_v, maxval=max_v), name='w1')
         b1 = tf.Variable(tf.zeros([n_hidden_2]), name='b1')
-        l_hidden_2 = activate(tf.add(tf.matmul(l_hidden_1, w1), b1), name='l_hidden_2')
+        l_hidden_2_z = tf.add(tf.matmul(l_hidden_1, w1), b1, name='l_hidden_2_z')
+        l_hidden_2_bn = bn(l_hidden_2_z, [0], n_hidden_2)
+        l_hidden_2 = activate(l_hidden_2_bn, name='l_hidden_2')
         #
         w2 = tf.Variable(tf.random_uniform([n_hidden_2, n_output], minval=-max_v, maxval=max_v), name='w2')
         b2 = tf.Variable(tf.zeros([n_output]), name='b2')
-        #
-        self.l_output = tf.nn.softmax(tf.add(tf.matmul(l_hidden_2, w2), b2), name='l_output')
+        l_output_z = tf.add(tf.matmul(l_hidden_2, w2), b2, name='l_output_z')
+        l_output_bn = bn(l_output_z, [0], n_output)
+        self.l_output = tf.nn.softmax(l_output_bn, name='l_output')
         #
         self.l_better_output = tf.placeholder(tf.float32, [None, n_output], name='l_better_output')
         #
         self.f_decays = tf.placeholder(tf.float32, [None], name='f_decays')
         #
         self.cross_entropy = tf.reduce_mean(tf.multiply(
-            self.f_decays, -tf.reduce_sum(self.l_better_output * tf.log(self.l_output), reduction_indices=[1])),
-            name='decayed_cross_entropy')
+            self.f_decays, -tf.reduce_sum(self.l_better_output * tf.log(tf.clip_by_value(self.l_output, 1e-3, 1.0)),
+                                          reduction_indices=[1])), name='decayed_cross_entropy')
         #
         self.optimize = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.cross_entropy)
         #
         self.saver = tf.train.Saver()
         #
         self.sess = tf.Session()
-        self.sess.run(tf.global_variables_initializer())
+        self.sess.run(tf.global_variables_initializer(),
+                      feed_dict={self.training: True})
 
         #
         self.restore()
@@ -202,10 +232,16 @@ class GymPlayer:
                         pn.l_input_0: frame_low.reshape((1, -1)),
                         pn.l_input_1: frame_low_diff.reshape((1, -1)),
                         pn.l_input_2: frame_vlow.reshape((1, -1)),
-                        pn.l_input_3: frame_vlow_diff.reshape((1, -1))})
+                        pn.l_input_3: frame_vlow_diff.reshape((1, -1)),
+                        pn.training: False
+                    })
 
                 #
-                action = np.random.choice(action_n, p=actions.flatten())
+                actions_noise = np.random.random(action_n) * float(config['Breakout']['ACTION_NOISE']) / action_n
+                actions_p = actions.flatten() + actions_noise
+                actions_p /= np.sum(actions_p)
+                #
+                action = np.random.choice(action_n, p=actions_p)
                 # action = np.random.randint(action_n)
 
                 # start a game
@@ -253,9 +289,9 @@ class GymPlayer:
                     better_actions[better_actions < 0] = 0
                     better_actions[:, :] *= np.array(1.0 / better_actions.sum(axis=1)).reshape(-1, 1)
 
-                    assert np.count_nonzero(np.abs((better_actions.sum(axis=1)) - 1.0) > 0.01) == 0
-                    assert np.count_nonzero(better_actions < 0) == 0
-                    assert np.count_nonzero(better_actions > 1) == 0
+                    # assert np.count_nonzero(np.abs((better_actions.sum(axis=1)) - 1.0) > 0.01) == 0
+                    # assert np.count_nonzero(better_actions < 0) == 0
+                    # assert np.count_nonzero(better_actions > 1) == 0
 
                     self.ex_better_actions[ept_start:ept+1, :] = better_actions
 
@@ -267,7 +303,7 @@ class GymPlayer:
 
                     self.ep_total_rewards[ep] = total_reward
 
-                    print("GymWorker #{} has finished episode #{} for reward {} and t#{} ".format(
+                    print("GymWorker #{:<2d} has finished episode #{:<3d} for reward {:<5.1f} and t#{} ".format(
                         self.no, ep, total_reward, t))
                     break
 
@@ -306,10 +342,13 @@ class GymTrainer:
 
         #
         all_epts = np.array([gps[i].ept for i in range(gp_n)])
-        all_total_rewards = np.sum([gps[i].ep_total_rewards for i in range(gp_n)])
+        all_avg_reward = np.mean([gps[i].ep_total_rewards for i in range(gp_n)], axis=(0, 1))
+        all_min_reward = np.min([gps[i].ep_total_rewards for i in range(gp_n)])
+        all_max_reward = np.max([gps[i].ep_total_rewards for i in range(gp_n)])
+
         #
-        print("total experiences: {}, rewards/episode: {}".format(
-            np.sum(all_epts), np.sum(all_total_rewards)/int(config['Learn']['EPISODES_PER_RUN'])))
+        print("total experiences: {}, reward avg: {} min: {} max: {}".format(
+            np.sum(all_epts), all_avg_reward, all_min_reward, all_max_reward))
 
         #
         all_observations_0 = np.concatenate([gps[i].ex_observations_0[0:all_epts[i]+1] for i in range(gp_n)])
@@ -322,6 +361,7 @@ class GymTrainer:
         pn = self.pn
 
         for i in range(int(config['Learn']['ITERATIONS_PER_LEARN'])):
+
             [xe, _] = pn.sess.run(
                 [pn.cross_entropy, pn.optimize],
                 feed_dict={
@@ -330,17 +370,24 @@ class GymTrainer:
                     pn.l_input_2: all_observations_2,
                     pn.l_input_3: all_observations_3,
                     pn.l_better_output: all_better_actions,
-                    pn.f_decays: all_decays})
+                    pn.f_decays: all_decays,
+                    pn.training: True
+                })
+
             if i % int(config['Learn']['PRINT_PER_ITERATIONS']) == 0:
                 print("learn #{:<5d}: cross entropy: {:7.4f}".format(i, xe))
 
         print("Finished training")
 
+
 trainer = GymTrainer()
 
-for tr in range(int(config['Learn']['PLAY_N_TRAIN_N'])):
+for run in range(int(config['Learn']['RUNS'])):
 
-    print("Start to play & train #{}...".format(tr))
+    print("Start to run #{}...".format(run))
 
     trainer.play()
     trainer.train()
+
+    if run % int(config['Learn']['SAVE_MODEL_PER_RUNS']) == 0:
+        trainer.pn.save()
