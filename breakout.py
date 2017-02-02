@@ -1,7 +1,7 @@
 # import gym
 import gym.wrappers
 import numpy as np
-# import time
+import time
 import tensorflow as tf
 # import matplotlib.pyplot as plt
 import configparser
@@ -28,7 +28,7 @@ class BreakoutPolicyNetwork:
 
         # Tensorflow Policy network
         #
-        activate = tf.nn.tanh
+        activate = tf.nn.relu
         max_v = 0.2
         learning_rate = float(config['Learn']['LEARNING_RATE'])
 
@@ -170,14 +170,14 @@ class GymPlayer:
 
         print("GymWorker #{} created".format(no))
 
-    def run_episodes(self, ep_n):
+    def run_episodes(self, ep_n=1, render=False):
 
         print("GymWorker #{} is running {} New Episodes...".format(self.no, ep_n))
-        thread = threading.Thread(target=self.run, args=(ep_n, ))
+        thread = threading.Thread(target=self.run, args=(ep_n, render))
         thread.start()
         return thread
 
-    def run(self, ep_n):
+    def run(self, ep_n=1, render=False):
 
         pn = self.pn
 
@@ -213,6 +213,11 @@ class GymPlayer:
             for t in range(t_max):
 
                 ept = self.ept
+
+                #
+                if render:
+                    self.env.render()
+                    time.sleep(float(config['Atari']['RENDER_SLEEP']))
 
                 #
                 frame_low = np.array(self.screen_shrink(observation, s_low_x, s_low_y, 1).mean(axis=2) > 0,
@@ -303,7 +308,7 @@ class GymPlayer:
 
                     self.ep_total_rewards[ep] = total_reward
 
-                    print("GymWorker #{:<2d} has finished episode #{:<3d} for reward {:<5.1f} and t#{} ".format(
+                    print("GymWorker #{:<2d} has finished episode #{:<3d} for reward {:5.1f} and t#{} ".format(
                         self.no, ep, total_reward, t))
                     break
 
@@ -313,7 +318,7 @@ class GymPlayer:
 
 class GymTrainer:
 
-    def __init__(self):
+    def __init__(self, player_n):
 
         #
         self.pn = BreakoutPolicyNetwork()
@@ -321,14 +326,15 @@ class GymTrainer:
         #
         self.gps = []
         #
-        for my_i in range(int(config['Learn']['PLAYER_N'])):
+        for my_i in range(player_n):
             self.gps.append(GymPlayer(my_i, self.pn))
 
-    def play(self):
+    def play(self, render):
 
         threads = []
         for i, gp in enumerate(self.gps):
-            threads.append(gp.run_episodes(int(config['Learn']['EPISODES_PER_RUN'])))
+            threads.append(gp.run_episodes(int(config['Learn']['EPISODES_PER_RUN']),
+                                           render=render))
 
         for t in threads:
             t.join()
@@ -347,7 +353,7 @@ class GymTrainer:
         all_max_reward = np.max([gps[i].ep_total_rewards for i in range(gp_n)])
 
         #
-        print("total experiences: {}, reward avg: {} min: {} max: {}".format(
+        print("total experiences: {:,}, reward avg: {:5.2f} min: {} max: {}".format(
             np.sum(all_epts), all_avg_reward, all_min_reward, all_max_reward))
 
         #
@@ -380,14 +386,20 @@ class GymTrainer:
         print("Finished training")
 
 
-trainer = GymTrainer()
+play_only = config.getboolean('Atari', 'PLAY_ONLY')
+
+if play_only:
+    config['Learn']['PLAYER_N'] = str(1)
+
+trainer = GymTrainer(int(config['Learn']['PLAYER_N']))
 
 for run in range(int(config['Learn']['RUNS'])):
 
     print("Start to run #{}...".format(run))
 
-    trainer.play()
-    trainer.train()
+    trainer.play(render=play_only)
 
-    if run % int(config['Learn']['SAVE_MODEL_PER_RUNS']) == 0:
-        trainer.pn.save()
+    if not play_only:
+        trainer.train()
+        if run % int(config['Learn']['SAVE_MODEL_PER_RUNS']) == 0:
+            trainer.pn.save()
