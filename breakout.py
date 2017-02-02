@@ -393,18 +393,18 @@ if play_only:
 
 trainer = GymTrainer(int(config['Learn']['PLAYER_N']))
 
-p_adjust = float(config['Learn']['P_ADJUST_START'])
+my_p_adjust = float(config['Learn']['P_ADJUST_START'])
 
 for run in range(int(config['Learn']['RUNS'])):
 
     print("Start to run #{}...".format(run))
 
-    p_adjust = max(p_adjust * float(config['Learn']['P_ADJUST_DECAY']),
-                   float(config['Learn']['P_ADJUST_END']))
+    my_p_adjust = max(my_p_adjust * float(config['Learn']['P_ADJUST_DECAY']),
+                      float(config['Learn']['P_ADJUST_END']))
 
-    print("Set p_adjust to {:4.2f}", p_adjust)
+    print("Set p_adjust to {:4.2f}", my_p_adjust)
 
-    trainer.play(render=play_only, p_adjust=p_adjust)
+    trainer.play(render=play_only, p_adjust=my_p_adjust)
 
     if not play_only:
         trainer.train()
