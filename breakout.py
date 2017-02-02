@@ -29,7 +29,7 @@ class BreakoutPolicyNetwork:
         # Tensorflow Policy network
         #
         activate = tf.nn.relu
-        max_v = 0.2
+        max_v = 0.1
         learning_rate = float(config['Learn']['LEARNING_RATE'])
 
         #
@@ -126,6 +126,70 @@ class BreakoutPolicyNetwork:
             print("Successfully restored model")
 
 
+class Experiences:
+    
+    def __init__(self, ex_max):
+        
+        #
+        self.exs = dict()
+        self.m_lim = ex_max
+        self.m = 0
+        self.rollp = 0  # rolling pointer
+        
+        #
+        obsrv_low_dim = int(config['Atari']['SCREEN_LOW_X']) * int(config['Atari']['SCREEN_LOW_Y'])
+        obsrv_low_diff_dim = obsrv_low_dim
+        obsrv_vlow_dim = int(config['Atari']['SCREEN_VERY_LOW_X']) * int(config['Atari']['SCREEN_VERY_LOW_Y'])
+        obsrv_vlow_diff_dim = obsrv_vlow_dim
+        actions_n = int(config['Breakout']['ACTION_N'])
+
+        self.exs['obsrv_low'] = np.empty((ex_max, obsrv_low_dim))
+        self.exs['obsrv_low_diff'] = np.empty((ex_max, obsrv_low_diff_dim))
+        self.exs['obsrv_vlow'] = np.empty((ex_max, obsrv_vlow_dim))
+        self.exs['obsrv_vlow_diff'] = np.empty((ex_max, obsrv_vlow_diff_dim))
+        self.exs['actions'] = np.empty((ex_max, actions_n), dtype=np.float)
+        self.exs['actions_done'] = np.empty((ex_max, actions_n), dtype=np.bool)
+        self.exs['rewards'] = np.empty(ex_max)
+        self.exs['better_actions'] = np.empty((ex_max, actions_n), dtype=np.float)
+        self.exs['decays'] = np.empty(ex_max)
+
+    def set(self, ex_key, ex_i, ex):
+        self.exs[ex_key][ex_i] = ex
+
+    def get(self, ex_key, ex_i=None):
+        if ex_i is None:
+            exs = self.exs[ex_key][0:self.m]
+        else:
+            exs = self.exs[ex_key][ex_i]
+        return exs
+
+    def concatenate(self, exs_list):
+        for exs in exs_list:
+            m = exs.m
+            if self.rollp + m > self.m_lim:
+                assert self.rollp + m < self.m_lim * 2  # don't allow case of rolling twice
+                do_roll = True
+                m1 = self.m_lim - self.rollp
+                m2 = m - m1
+            else:
+                do_roll = False
+
+            for ex_key in self.exs:
+                if do_roll:
+                    self.set(ex_key, slice(self.rollp, self.rollp + m1), exs.get(ex_key, slice(0, m1)))
+                    self.set(ex_key, slice(0, m2), exs.get(ex_key, slice(m1, m)))
+                else:
+                    self.set(ex_key, slice(self.rollp, self.rollp + m), exs.get(ex_key))
+
+            if do_roll:
+                self.m = self.m_lim
+                self.rollp = m2
+            else:
+                if self.m != self.m_lim:
+                    self.m += m
+                self.rollp += m
+
+
 #
 class GymPlayer:
 
@@ -136,31 +200,6 @@ class GymPlayer:
             y, int(data.shape[1] / y),
             z, int(data.shape[2] / z)).mean(axis=(1, 3, 5))
 
-    @staticmethod
-    def new_exs(ep_n):
-
-        ex_max = ep_n * int(config['Learn']['T_MAX'])
-
-        #
-        obsrv_low_dim = int(config['Atari']['SCREEN_LOW_X']) * int(config['Atari']['SCREEN_LOW_Y'])
-        obsrv_low_diff_dim = obsrv_low_dim
-        obsrv_vlow_dim = int(config['Atari']['SCREEN_VERY_LOW_X']) * int(config['Atari']['SCREEN_VERY_LOW_Y'])
-        obsrv_vlow_diff_dim = obsrv_vlow_dim
-        actions_n = int(config['Breakout']['ACTION_N'])
-       
-        exs = dict()
-        exs['obsrv_low'] = np.empty((ex_max, obsrv_low_dim))
-        exs['obsrv_low_diff'] = np.empty((ex_max, obsrv_low_diff_dim))
-        exs['obsrv_vlow'] = np.empty((ex_max, obsrv_vlow_dim))
-        exs['obsrv_vlow_diff'] = np.empty((ex_max, obsrv_vlow_diff_dim))
-        exs['actions'] = np.empty((ex_max, actions_n))
-        exs['actions_done'] = np.empty((ex_max, actions_n), dtype=np.bool)
-        exs['rewards'] = np.empty(ex_max)
-        exs['better_actions'] = np.empty((ex_max, actions_n))
-        exs['decays'] = np.empty(ex_max)
-
-        return exs
-    
     def __init__(self, no, pn):
 
         self.no = no
@@ -170,20 +209,24 @@ class GymPlayer:
         self.pn = pn
 
         #
-        ep_run = int(config['Learn']['EPISODES_PER_RUN'])
+        ep_n = int(config['Learn']['EPISODES_PER_RUN'])
+
+        #
+
+        #
+        self.exs = Experiences(ep_n * int(config['Learn']['T_MAX']))
 
         #
         self.ept = -1
-        #
-        self.exs = GymPlayer.new_exs(ep_run)
-        #
-        self.ep_total_rewards = np.empty(ep_run)
 
-        print("GymWorker #{} created".format(no))
+        #
+        self.ep_total_rewards = np.empty(ep_n)
+
+        print("GymWorker #{:<2d} created".format(no))
 
     def run_episodes(self, ep_n=1, render=False, p_adjust=0.1):
 
-        print("GymWorker #{} is running {} New Episodes...".format(self.no, ep_n))
+        print("GymWorker #{:<2d} is running {} New Episodes...".format(self.no, ep_n))
         thread = threading.Thread(target=self.run, args=(ep_n, render, p_adjust))
         thread.start()
         return thread
@@ -202,16 +245,16 @@ class GymPlayer:
         action_n = int(config['Breakout']['ACTION_N'])
         action_offset = int(config['Breakout']['ACTION_OFFSET'])
 
-        # cumulative t for all episode
-        self.ept = 0 
-        
+        #
+        self.ept = 0
+        ept_start = 0
+
         for ep in range(ep_n):
 
             observation = self.env.reset()
 
             # breakout-specific code
             lives = -1
-            ept_start = self.ept
 
             #
             total_reward = 0
@@ -223,6 +266,7 @@ class GymPlayer:
             for t in range(t_max):
 
                 ept = self.ept
+                exs = self.exs
 
                 #
                 if render:
@@ -251,11 +295,11 @@ class GymPlayer:
                         pn.training: False
                     })
 
-                #
+                # add noise
                 actions_noise = np.random.random(action_n) * float(config['Breakout']['ACTION_NOISE']) / action_n
                 actions_p = actions.flatten() + actions_noise
                 actions_p /= np.sum(actions_p)
-                #
+                #                #
                 action = np.random.choice(action_n, p=actions_p)
                 # action = np.random.randint(action_n)
 
@@ -263,25 +307,33 @@ class GymPlayer:
                 if ept - ept_start == 0:
                     action = 0
 
+                #
+                actions_done = np.zeros(action_n, dtype=np.bool)
+                actions_done[action] = True
+
                 # save
-                self.exs['obsrv_low'][ept, :] = frame_low
-                self.exs['obsrv_low_diff'][ept, :] = frame_low_diff
-                self.exs['obsrv_vlow'][ept, :] = frame_vlow
-                self.exs['obsrv_vlow_diff'][ept, :] = frame_vlow_diff
-                self.exs['actions'][ept, :] = actions
-                self.exs['actions_done'][ept, :] = False
-                self.exs['actions_done'][ept, action] = True
-                self.exs['rewards'][ept] = 0
+                exs.set('obsrv_low', ept, frame_low)
+                exs.set('obsrv_low_diff', ept, frame_low_diff)
+                exs.set('obsrv_vlow', ept, frame_vlow)
+                exs.set('obsrv_vlow_diff', ept, frame_vlow_diff)
+                exs.set('actions', ept, actions)
+                exs.set('actions_done', ept, actions_done)
+                exs.set('rewards', ept, 0)
 
                 #
                 observation, reward, done, info = self.env.step(action + action_offset)
 
                 #
-                # print("GymWorker #{}: Episode {}/{}: t#{}: reward:{}, info:{} ".format(
-                #     self.no, ep, ep_n, t, reward, info))
+                # print("GymWorker #{:2d}: Episode {:3d}/{:<3d}: t#{:<5d}: action:{}, reward:{}, info:{} ".format(
+                #     self.no, ep, ep_n, t, action, reward, info))
 
                 total_reward += reward
                 info_lives = info['ale.lives']
+
+                timeout = False
+                if t == t_max - 1:
+                    timeout = True
+                    reward = 0  # TODO: ???
 
                 # check dead or alive
                 if lives != info_lives:  # new life
@@ -292,38 +344,51 @@ class GymPlayer:
                     lives = info_lives
 
                 # got (plus or minus) reward
-                if reward != 0:
+                if reward != 0 or done or timeout:
 
-                    m = ept - ept_start + 1
+                    r_m = ept - ept_start + 1
 
-                    self.exs['rewards'][ept_start:ept+1] = reward
+                    exs.set('rewards', slice(ept_start, ept+1), reward)
 
-                    better_actions = self.exs['actions'][ept_start:ept+1].copy()
-                    actions_done = self.exs['actions_done'][ept_start:ept+1]
-                    better_actions[actions_done] += reward * p_adjust
-                    better_actions[better_actions < 0] = 0
-                    better_actions[:, :] *= np.array(1.0 / better_actions.sum(axis=1)).reshape(-1, 1)
+                    r_better_actions = exs.get('actions', slice(ept_start, ept+1)).copy()
+                    r_actions_done = exs.get('actions_done', slice(ept_start, ept+1))
 
-                    # assert np.count_nonzero(np.abs((better_actions.sum(axis=1)) - 1.0) > 0.01) == 0
-                    # assert np.count_nonzero(better_actions < 0) == 0
-                    # assert np.count_nonzero(better_actions > 1) == 0
+                    # DEBUG
+                    # print(np.mean(r_actions_done, axis=0, dtype=np.float))
 
-                    self.exs['better_actions'][ept_start:ept+1, :] = better_actions
+                    r_better_actions[r_actions_done] += reward * p_adjust
+                    r_better_actions[r_better_actions < 0] = 0
+                    r_better_actions[:, :] *= np.array(1.0 / r_better_actions.sum(axis=1)).reshape(-1, 1)
 
-                    self.exs['decays'][ept_start:ept+1] = np.array([decay ** (m - i - 1) for i in range(m)])
+                    assert np.count_nonzero(np.abs((r_better_actions.sum(axis=1)) - 1.0) > 0.01) == 0
+                    assert np.count_nonzero(r_better_actions < 0) == 0
+                    assert np.count_nonzero(r_better_actions > 1) == 0
+
+                    exs.set('better_actions', slice(ept_start, ept+1), r_better_actions)
+
+                    exs.set('decays', slice(ept_start, ept+1),
+                            np.array([decay ** (r_m - i - 1) for i in range(r_m)]))
 
                     ept_start = ept + 1
 
-                if done or t == t_max - 1:
+                #
+                self.ept += 1
+
+                if done or timeout:
+
+                    # TODO: automate setting m or rollp
+                    self.exs.m = self.ept
+                    self.exs.rollp = self.ept
+
+                    assert self.exs.exs['decays'][self.exs.m - 1] == 1
+                    assert np.count_nonzero(np.abs(
+                        np.sum(self.exs.exs['better_actions'][0:self.exs.m], axis=1) - 1.0) > 0.01) == 0
 
                     self.ep_total_rewards[ep] = total_reward
 
                     print("GymWorker #{:<2d} has finished episode #{:<3d} for reward {:5.1f} and t#{} ".format(
                         self.no, ep, total_reward, t))
                     break
-
-                #
-                self.ept += 1
 
 
 class GymTrainer:
@@ -339,7 +404,7 @@ class GymTrainer:
         for my_i in range(player_n):
             self.gps.append(GymPlayer(my_i, self.pn))
 
-        self.past_exs = None
+        self.past_exs = Experiences(int(config['Learn']['HISTORY_EX_MAX']))
 
     def play(self, render, p_adjust):
 
@@ -360,38 +425,55 @@ class GymTrainer:
         gp_n = len(gps)
 
         #
-        all_epts = np.array([gps[i].ept for i in range(gp_n)])
-        all_avg_reward = np.mean([gps[i].ep_total_rewards for i in range(gp_n)], axis=(0, 1))
-        all_min_reward = np.min([gps[i].ep_total_rewards for i in range(gp_n)])
-        all_max_reward = np.max([gps[i].ep_total_rewards for i in range(gp_n)])
+        m = np.sum([gps[i].exs.m for i in range(gp_n)])
+        avg_reward = np.mean([gps[i].ep_total_rewards for i in range(gp_n)], axis=(0, 1))
+        min_reward = np.min([gps[i].ep_total_rewards for i in range(gp_n)])
+        max_reward = np.max([gps[i].ep_total_rewards for i in range(gp_n)])
 
         #
-        print("total experiences: {:,}, reward avg: {:5.2f} min: {} max: {}".format(
-            np.sum(all_epts), all_avg_reward, all_min_reward, all_max_reward))
+        print("last run total experiences: {:,}, reward avg: {:5.2f} min: {} max: {}".format(
+            m, avg_reward, min_reward, max_reward))
 
         #
-        all_exs = dict()
-        for ex_key in gps[0].exs:
-            all_exs[ex_key] = np.concatenate([gps[i].exs[ex_key][0:all_epts[i]+1] for i in range(gp_n)])
+        if config.getboolean('Learn', 'USE_PAST_EX'):
+            past_exs = self.past_exs
+            past_exs.concatenate([gps[i].exs for i in range(gp_n)])
+            exs = past_exs
+            #
+            print("past total experiences: {:,}".format(past_exs.m))
+        else:
+            exs = Experiences(m)
+            exs.concatenate([gps[i].exs for i in range(gp_n)])
 
-        pn = self.pn
+        if exs.m > 0:
 
-        for i in range(int(config['Learn']['ITERATIONS_PER_LEARN'])):
+            pn = self.pn
 
-            [xe, _] = pn.sess.run(
-                [pn.cross_entropy, pn.optimize],
-                feed_dict={
-                    pn.l_input_0: all_exs['obsrv_low'],
-                    pn.l_input_1: all_exs['obsrv_low_diff'],
-                    pn.l_input_2: all_exs['obsrv_vlow'],
-                    pn.l_input_3: all_exs['obsrv_vlow_diff'],
-                    pn.l_better_output: all_exs['better_output'],
-                    pn.f_decays: all_exs['decays'],
-                    pn.training: True
-                })
+            exs_obsrv_low = exs.get('obsrv_low')
+            exs_obsrv_low_diff = exs.get('obsrv_low_diff')
+            exs_obsrv_vlow = exs.get('obsrv_vlow')
+            exs_obsrv_vlow_diff = exs.get('obsrv_vlow_diff')
+            exs_better_actions = exs.get('better_actions')
+            exs_decays = exs.get('decays')
 
-            if i % int(config['Learn']['PRINT_PER_ITERATIONS']) == 0:
-                print("learn #{:<5d}: cross entropy: {:7.4f}".format(i, xe))
+            for i in range(int(config['Learn']['ITERATIONS_PER_LEARN'])):
+
+                [xe, _] = pn.sess.run(
+                    [pn.cross_entropy, pn.optimize],
+                    feed_dict={
+                        pn.l_input_0: exs_obsrv_low,
+                        pn.l_input_1: exs_obsrv_low_diff,
+                        pn.l_input_2: exs_obsrv_vlow,
+                        pn.l_input_3: exs_obsrv_vlow_diff,
+                        pn.l_better_output: exs_better_actions,
+                        pn.f_decays: exs_decays,
+                        pn.training: True
+                    })
+
+                if (i % int(config['Learn']['PRINT_PER_ITERATIONS']) == 0 or
+                        i == int(config['Learn']['ITERATIONS_PER_LEARN']) - 1):
+
+                    print("learn #{:<5d}: cross entropy: {:7.4f}".format(i, xe))
 
         print("Finished training")
 
@@ -408,10 +490,6 @@ my_p_adjust = float(config['Learn']['P_ADJUST_START'])
 for run in range(int(config['Learn']['RUNS'])):
 
     print("Start to run #{}...".format(run))
-
-    my_p_adjust = max(my_p_adjust * float(config['Learn']['P_ADJUST_DECAY']),
-                      float(config['Learn']['P_ADJUST_END']))
-
     print("Set p_adjust to {:4.2f}".format(my_p_adjust))
 
     trainer.play(render=play_only, p_adjust=my_p_adjust)
@@ -420,3 +498,6 @@ for run in range(int(config['Learn']['RUNS'])):
         trainer.train()
         if run > 0 and run % int(config['Learn']['SAVE_MODEL_PER_RUNS']) == 0:
             trainer.pn.save()
+
+    my_p_adjust = max(my_p_adjust * float(config['Learn']['P_ADJUST_DECAY']),
+                      float(config['Learn']['P_ADJUST_END']))
