@@ -170,14 +170,14 @@ class GymPlayer:
 
         print("GymWorker #{} created".format(no))
 
-    def run_episodes(self, ep_n=1, render=False):
+    def run_episodes(self, ep_n=1, render=False, p_adjust=0.1):
 
         print("GymWorker #{} is running {} New Episodes...".format(self.no, ep_n))
-        thread = threading.Thread(target=self.run, args=(ep_n, render))
+        thread = threading.Thread(target=self.run, args=(ep_n, render, p_adjust))
         thread.start()
         return thread
 
-    def run(self, ep_n=1, render=False):
+    def run(self, ep_n=1, render=False, p_adjust=0.1):
 
         pn = self.pn
 
@@ -187,7 +187,6 @@ class GymPlayer:
         s_low_y = int(config['Atari']['SCREEN_LOW_Y'])
         s_vlow_x = int(config['Atari']['SCREEN_VERY_LOW_X'])
         s_vlow_y = int(config['Atari']['SCREEN_VERY_LOW_Y'])
-        p_adjust = float(config['Learn']['P_ADJUST'])
         decay = float(config['Learn']['DECAY'])
         action_n = int(config['Breakout']['ACTION_N'])
         action_offset = int(config['Breakout']['ACTION_OFFSET'])
@@ -329,12 +328,13 @@ class GymTrainer:
         for my_i in range(player_n):
             self.gps.append(GymPlayer(my_i, self.pn))
 
-    def play(self, render):
+    def play(self, render, p_adjust):
 
         threads = []
         for i, gp in enumerate(self.gps):
             threads.append(gp.run_episodes(int(config['Learn']['EPISODES_PER_RUN']),
-                                           render=render))
+                                           render=render,
+                                           p_adjust=p_adjust))
 
         for t in threads:
             t.join()
@@ -393,13 +393,20 @@ if play_only:
 
 trainer = GymTrainer(int(config['Learn']['PLAYER_N']))
 
+p_adjust = float(config['Learn']['P_ADJUST_START'])
+
 for run in range(int(config['Learn']['RUNS'])):
 
     print("Start to run #{}...".format(run))
 
-    trainer.play(render=play_only)
+    p_adjust = max(p_adjust * float(config['Learn']['P_ADJUST_DECAY']),
+                   float(config['Learn']['P_ADJUST_END']))
+
+    print("Set p_adjust to {:4.2f}", p_adjust)
+
+    trainer.play(render=play_only, p_adjust=p_adjust)
 
     if not play_only:
         trainer.train()
-        if run % int(config['Learn']['SAVE_MODEL_PER_RUNS']) == 0:
+        if run > 0 and run % int(config['Learn']['SAVE_MODEL_PER_RUNS']) == 0:
             trainer.pn.save()
