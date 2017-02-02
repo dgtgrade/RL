@@ -136,6 +136,31 @@ class GymPlayer:
             y, int(data.shape[1] / y),
             z, int(data.shape[2] / z)).mean(axis=(1, 3, 5))
 
+    @staticmethod
+    def new_exs(ep_n):
+
+        ex_max = ep_n * int(config['Learn']['T_MAX'])
+
+        #
+        obsrv_low_dim = int(config['Atari']['SCREEN_LOW_X']) * int(config['Atari']['SCREEN_LOW_Y'])
+        obsrv_low_diff_dim = obsrv_low_dim
+        obsrv_vlow_dim = int(config['Atari']['SCREEN_VERY_LOW_X']) * int(config['Atari']['SCREEN_VERY_LOW_Y'])
+        obsrv_vlow_diff_dim = obsrv_vlow_dim
+        actions_n = int(config['Breakout']['ACTION_N'])
+       
+        exs = dict()
+        exs['obsrv_low'] = np.empty((ex_max, obsrv_low_dim))
+        exs['obsrv_low_diff'] = np.empty((ex_max, obsrv_low_diff_dim))
+        exs['obsrv_vlow'] = np.empty((ex_max, obsrv_vlow_dim))
+        exs['obsrv_vlow_diff'] = np.empty((ex_max, obsrv_vlow_diff_dim))
+        exs['actions'] = np.empty((ex_max, actions_n))
+        exs['actions_done'] = np.empty((ex_max, actions_n), dtype=np.bool)
+        exs['rewards'] = np.empty(ex_max)
+        exs['better_actions'] = np.empty((ex_max, actions_n))
+        exs['decays'] = np.empty(ex_max)
+
+        return exs
+    
     def __init__(self, no, pn):
 
         self.no = no
@@ -146,26 +171,12 @@ class GymPlayer:
 
         #
         ep_run = int(config['Learn']['EPISODES_PER_RUN'])
-        t_max = int(config['Learn']['T_MAX'])
-
-        #
-        obs_dim_0 = int(config['Atari']['SCREEN_LOW_X']) * int(config['Atari']['SCREEN_LOW_Y'])
-        obs_dim_1 = obs_dim_0
-        obs_dim_2 = int(config['Atari']['SCREEN_VERY_LOW_X']) * int(config['Atari']['SCREEN_VERY_LOW_Y'])
-        obs_dim_3 = obs_dim_2
-        actions_n = int(config['Breakout']['ACTION_N'])
 
         #
         self.ept = -1
-        self.ex_observations_0 = np.empty((ep_run * t_max, obs_dim_0))
-        self.ex_observations_1 = np.empty((ep_run * t_max, obs_dim_1))
-        self.ex_observations_2 = np.empty((ep_run * t_max, obs_dim_2))
-        self.ex_observations_3 = np.empty((ep_run * t_max, obs_dim_3))
-        self.ex_actions = np.empty((ep_run * t_max, actions_n))
-        self.ex_actions_done = np.empty((ep_run * t_max, actions_n), dtype=np.bool)
-        self.ex_rewards = np.empty(ep_run * t_max)
-        self.ex_better_actions = np.empty((ep_run * t_max, actions_n))
-        self.ex_decays = np.empty(ep_run * t_max)
+        #
+        self.exs = GymPlayer.new_exs(ep_run)
+        #
         self.ep_total_rewards = np.empty(ep_run)
 
         print("GymWorker #{} created".format(no))
@@ -253,14 +264,14 @@ class GymPlayer:
                     action = 0
 
                 # save
-                self.ex_observations_0[ept, :] = frame_low
-                self.ex_observations_1[ept, :] = frame_low_diff
-                self.ex_observations_2[ept, :] = frame_vlow
-                self.ex_observations_3[ept, :] = frame_vlow_diff
-                self.ex_actions[ept, :] = actions
-                self.ex_actions_done[ept, :] = False
-                self.ex_actions_done[ept, action] = True
-                self.ex_rewards[ept] = 0
+                self.exs['obsrv_low'][ept, :] = frame_low
+                self.exs['obsrv_low_diff'][ept, :] = frame_low_diff
+                self.exs['obsrv_vlow'][ept, :] = frame_vlow
+                self.exs['obsrv_vlow_diff'][ept, :] = frame_vlow_diff
+                self.exs['actions'][ept, :] = actions
+                self.exs['actions_done'][ept, :] = False
+                self.exs['actions_done'][ept, action] = True
+                self.exs['rewards'][ept] = 0
 
                 #
                 observation, reward, done, info = self.env.step(action + action_offset)
@@ -285,10 +296,10 @@ class GymPlayer:
 
                     m = ept - ept_start + 1
 
-                    self.ex_rewards[ept_start:ept+1] = reward
+                    self.exs['rewards'][ept_start:ept+1] = reward
 
-                    better_actions = self.ex_actions[ept_start:ept+1].copy()
-                    actions_done = self.ex_actions_done[ept_start:ept+1]
+                    better_actions = self.exs['actions'][ept_start:ept+1].copy()
+                    actions_done = self.exs['actions_done'][ept_start:ept+1]
                     better_actions[actions_done] += reward * p_adjust
                     better_actions[better_actions < 0] = 0
                     better_actions[:, :] *= np.array(1.0 / better_actions.sum(axis=1)).reshape(-1, 1)
@@ -297,9 +308,9 @@ class GymPlayer:
                     # assert np.count_nonzero(better_actions < 0) == 0
                     # assert np.count_nonzero(better_actions > 1) == 0
 
-                    self.ex_better_actions[ept_start:ept+1, :] = better_actions
+                    self.exs['better_actions'][ept_start:ept+1, :] = better_actions
 
-                    self.ex_decays[ept_start:ept+1] = np.array([decay ** (m - i - 1) for i in range(m)])
+                    self.exs['decays'][ept_start:ept+1] = np.array([decay ** (m - i - 1) for i in range(m)])
 
                     ept_start = ept + 1
 
@@ -327,6 +338,8 @@ class GymTrainer:
         #
         for my_i in range(player_n):
             self.gps.append(GymPlayer(my_i, self.pn))
+
+        self.past_exs = None
 
     def play(self, render, p_adjust):
 
@@ -357,12 +370,9 @@ class GymTrainer:
             np.sum(all_epts), all_avg_reward, all_min_reward, all_max_reward))
 
         #
-        all_observations_0 = np.concatenate([gps[i].ex_observations_0[0:all_epts[i]+1] for i in range(gp_n)])
-        all_observations_1 = np.concatenate([gps[i].ex_observations_1[0:all_epts[i]+1] for i in range(gp_n)])
-        all_observations_2 = np.concatenate([gps[i].ex_observations_2[0:all_epts[i]+1] for i in range(gp_n)])
-        all_observations_3 = np.concatenate([gps[i].ex_observations_3[0:all_epts[i]+1] for i in range(gp_n)])
-        all_better_actions = np.concatenate([gps[i].ex_better_actions[0:all_epts[i]+1] for i in range(gp_n)])
-        all_decays = np.concatenate([gps[i].ex_decays[0:all_epts[i]+1] for i in range(gp_n)])
+        all_exs = dict()
+        for ex_key in gps[0].exs:
+            all_exs[ex_key] = np.concatenate([gps[i].exs[ex_key][0:all_epts[i]+1] for i in range(gp_n)])
 
         pn = self.pn
 
@@ -371,12 +381,12 @@ class GymTrainer:
             [xe, _] = pn.sess.run(
                 [pn.cross_entropy, pn.optimize],
                 feed_dict={
-                    pn.l_input_0: all_observations_0,
-                    pn.l_input_1: all_observations_1,
-                    pn.l_input_2: all_observations_2,
-                    pn.l_input_3: all_observations_3,
-                    pn.l_better_output: all_better_actions,
-                    pn.f_decays: all_decays,
+                    pn.l_input_0: all_exs['obsrv_low'],
+                    pn.l_input_1: all_exs['obsrv_low_diff'],
+                    pn.l_input_2: all_exs['obsrv_vlow'],
+                    pn.l_input_3: all_exs['obsrv_vlow_diff'],
+                    pn.l_better_output: all_exs['better_output'],
+                    pn.f_decays: all_exs['decays'],
                     pn.training: True
                 })
 
@@ -385,11 +395,11 @@ class GymTrainer:
 
         print("Finished training")
 
-
 play_only = config.getboolean('Atari', 'PLAY_ONLY')
 
 if play_only:
-    config['Learn']['PLAYER_N'] = str(1)
+    config['Learn']['PLAYER_N'] = '1'
+    config['Breakout']['ACTION_NOISE'] = '0.0' 
 
 trainer = GymTrainer(int(config['Learn']['PLAYER_N']))
 
@@ -402,7 +412,7 @@ for run in range(int(config['Learn']['RUNS'])):
     my_p_adjust = max(my_p_adjust * float(config['Learn']['P_ADJUST_DECAY']),
                       float(config['Learn']['P_ADJUST_END']))
 
-    print("Set p_adjust to {:4.2f}", my_p_adjust)
+    print("Set p_adjust to {:4.2f}".format(my_p_adjust))
 
     trainer.play(render=play_only, p_adjust=my_p_adjust)
 
