@@ -16,10 +16,6 @@ assert int(config['Atari']['SCREEN_Y']) % int(config['Atari']['SCREEN_VERY_LOW_Y
 assert int(config['Atari']['SCREEN_X']) % int(config['Atari']['SCREEN_LOW_X']) == 0
 assert int(config['Atari']['SCREEN_Y']) % int(config['Atari']['SCREEN_VERY_LOW_Y']) == 0
 
-#
-float_formatter = lambda x: "%+.6f" % x
-np.set_printoptions(formatter={'float_kind': float_formatter})
-
 
 #
 class BreakoutPolicyNetwork:
@@ -400,11 +396,16 @@ class GymTrainer:
 
         #
         self.gps = []
+
         #
         for my_i in range(player_n):
             self.gps.append(GymPlayer(my_i, self.pn))
 
         self.past_exs = Experiences(int(config['Learn']['HISTORY_EX_MAX']))
+
+        #
+        self.avg_reward_history = []
+        self.max_reward_history = []
 
     def play(self, render, p_adjust):
 
@@ -430,9 +431,18 @@ class GymTrainer:
         min_reward = np.min([gps[i].ep_total_rewards for i in range(gp_n)])
         max_reward = np.max([gps[i].ep_total_rewards for i in range(gp_n)])
 
+        self.avg_reward_history.append(avg_reward)
+        self.max_reward_history.append(max_reward)
+
         #
-        print("last run total experiences: {:,}, reward avg: {:5.2f} min: {} max: {}".format(
+        print("last run total experiences: {:,}, reward avg: {:5.2f} min: {:5.2f} max: {:5.2f}".format(
             m, avg_reward, min_reward, max_reward))
+
+        #
+        print_hist_n = 10
+        np.set_printoptions(formatter={'float_kind': lambda x: "%5.2f" % x})
+        print("last {} run reward avg: {}".format(print_hist_n, np.array(self.avg_reward_history[-print_hist_n:])))
+        print("                   max: {}".format(np.array(self.max_reward_history[-print_hist_n:])))
 
         #
         if config.getboolean('Learn', 'USE_PAST_EX'):
