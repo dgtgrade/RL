@@ -10,6 +10,7 @@ import threading
 #
 config = configparser.ConfigParser()
 config.read('breakout.ini')
+
 #
 assert int(config['Atari']['SCREEN_X']) % int(config['Atari']['SCREEN_LOW_X']) == 0
 assert int(config['Atari']['SCREEN_Y']) % int(config['Atari']['SCREEN_VERY_LOW_Y']) == 0
@@ -35,6 +36,9 @@ class BreakoutPolicyNetwork:
         n_input_3 = n_input_2
         n_hidden_1 = int(config['NeuralNetwork']['N_HIDDEN_1'])
         n_hidden_2 = int(config['NeuralNetwork']['N_HIDDEN_2'])
+        n_hidden_3 = int(config['NeuralNetwork']['N_HIDDEN_3'])
+        n_hidden_4 = int(config['NeuralNetwork']['N_HIDDEN_4'])
+        n_hidden_5 = int(config['NeuralNetwork']['N_HIDDEN_5'])
         n_output = int(config['Breakout']['ACTION_N'])
 
         #
@@ -60,6 +64,16 @@ class BreakoutPolicyNetwork:
 
             return tf.nn.batch_normalization(z, mean, var, beta, gamma, epsilon)
 
+        def fc(l_prev, n_cur, name='fc'):
+
+            n_prev = l_prev.get_shape().as_list()[-1]
+            w = tf.Variable(tf.random_uniform([n_prev, n_cur], minval=-max_v, maxval=max_v), name=name + '_w')
+            b = tf.Variable(tf.zeros([n_cur]), name=name + '_b')
+            l_cur_z = tf.add(tf.matmul(l_prev, w), b, name=name + '_z')
+            l_cur_bn = bn(l_cur_z, [0], n_cur)
+            l_cur = activate(l_cur_bn, name=name)
+            return l_cur
+
         #
         self.l_input_0 = tf.placeholder(tf.float32, [None, n_input_0], name='l_input_0')
         self.l_input_1 = tf.placeholder(tf.float32, [None, n_input_1], name='l_input_1')
@@ -77,17 +91,14 @@ class BreakoutPolicyNetwork:
         l_hidden_1_bn = bn(l_hidden_1_z, [0], n_hidden_1)
         l_hidden_1 = activate(l_hidden_1_bn, name='l_hidden_1')
         #
-        w1 = tf.Variable(tf.random_uniform([n_hidden_1, n_hidden_2], minval=-max_v, maxval=max_v), name='w1')
-        b1 = tf.Variable(tf.zeros([n_hidden_2]), name='b1')
-        l_hidden_2_z = tf.add(tf.matmul(l_hidden_1, w1), b1, name='l_hidden_2_z')
-        l_hidden_2_bn = bn(l_hidden_2_z, [0], n_hidden_2)
-        l_hidden_2 = activate(l_hidden_2_bn, name='l_hidden_2')
         #
-        w2 = tf.Variable(tf.random_uniform([n_hidden_2, n_output], minval=-max_v, maxval=max_v), name='w2')
-        b2 = tf.Variable(tf.zeros([n_output]), name='b2')
-        l_output_z = tf.add(tf.matmul(l_hidden_2, w2), b2, name='l_output_z')
-        l_output_bn = bn(l_output_z, [0], n_output)
-        self.l_output = tf.nn.softmax(l_output_bn, name='l_output')
+        l_hidden_2 = fc(l_hidden_1, n_hidden_2, 'l_hidden_2')
+        l_hidden_3 = fc(l_hidden_2, n_hidden_3, 'l_hidden_3')
+        l_hidden_4 = fc(l_hidden_3, n_hidden_4, 'l_hidden_4')
+        l_hidden_5 = fc(l_hidden_4, n_hidden_5, 'l_hidden_5')
+        l_output = fc(l_hidden_5, n_output, 'l_output')
+        #
+        self.l_output = tf.nn.softmax(l_output, name='l_output_softmax')
         #
         self.l_better_output = tf.placeholder(tf.float32, [None, n_output], name='l_better_output')
         #
