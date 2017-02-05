@@ -489,22 +489,32 @@ class GymTrainer:
             exs_better_actions = exs.get('better_actions')
             exs_decays = exs.get('decays')
 
+            mbs = int(config['Learn']['MINI_BATCH_SIZE'])
+
             for i in range(int(config['Learn']['ITERATIONS_PER_LEARN'])):
 
-                [xe, _] = pn.sess.run(
-                    [pn.cross_entropy, pn.optimize],
-                    feed_dict={
-                        pn.l_input_cur: exs_obsrv_cur,
-                        pn.l_input_chg: exs_obsrv_chg,
-                        pn.l_better_output: exs_better_actions,
-                        pn.f_decays: exs_decays,
-                        pn.training: True
-                    })
+                mbn = math.ceil(exs.m / mbs)
+                xe = np.empty(mbn)
+
+                for j in range(mbn):
+
+                    exs_start = mbs * j
+                    exs_end = mbs * (j+1)
+
+                    [xe[j], _] = pn.sess.run(
+                        [pn.cross_entropy, pn.optimize],
+                        feed_dict={
+                            pn.l_input_cur: exs_obsrv_cur[exs_start:exs_end],
+                            pn.l_input_chg: exs_obsrv_chg[exs_start:exs_end],
+                            pn.l_better_output: exs_better_actions[exs_start:exs_end],
+                            pn.f_decays: exs_decays[exs_start:exs_end],
+                            pn.training: True
+                        })
 
                 if (i % int(config['Learn']['PRINT_PER_ITERATIONS']) == 0 or
                         i == int(config['Learn']['ITERATIONS_PER_LEARN']) - 1):
 
-                    print("learn #{:<5d}: cross entropy: {:7.4f}".format(i, xe))
+                    print("learn #{:<5d}: cross entropy: {:7.4f}".format(i, np.mean(xe)))
 
         print("Finished training")
 
