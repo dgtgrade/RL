@@ -13,10 +13,11 @@ config.read('breakout.ini')
 
 #
 assert int(config['Atari']['SCREEN_X']) % int(config['Atari']['SCREEN_LOW_X']) == 0
-assert int(config['Atari']['SCREEN_Y']) % int(config['Atari']['SCREEN_VERY_LOW_Y']) == 0
-assert int(config['Atari']['SCREEN_X']) % int(config['Atari']['SCREEN_LOW_X']) == 0
-assert int(config['Atari']['SCREEN_Y']) % int(config['Atari']['SCREEN_VERY_LOW_Y']) == 0
+assert int(config['Atari']['SCREEN_Y']) % int(config['Atari']['SCREEN_LOW_Y']) == 0
 
+#
+dim_input_cur = [int(config['Atari']['SCREEN_LOW_X']), int(config['Atari']['SCREEN_LOW_Y']), 1]
+dim_input_chg = dim_input_cur
 
 #
 class BreakoutPolicyNetwork:
@@ -29,11 +30,6 @@ class BreakoutPolicyNetwork:
         max_v = 0.1
         learning_rate = float(config['Learn']['LEARNING_RATE'])
 
-        #
-        n_input_0 = int(config['Atari']['SCREEN_LOW_X']) * int(config['Atari']['SCREEN_LOW_Y'])
-        n_input_1 = n_input_0
-        n_input_2 = int(config['Atari']['SCREEN_VERY_LOW_X']) * int(config['Atari']['SCREEN_VERY_LOW_Y'])
-        n_input_3 = n_input_2
         n_hidden_1 = int(config['NeuralNetwork']['N_HIDDEN_1'])
         n_hidden_2 = int(config['NeuralNetwork']['N_HIDDEN_2'])
         n_hidden_3 = int(config['NeuralNetwork']['N_HIDDEN_3'])
@@ -75,27 +71,24 @@ class BreakoutPolicyNetwork:
             return l_cur
 
         #
-        self.l_input_0 = tf.placeholder(tf.float32, [None, n_input_0], name='l_input_0')
-        self.l_input_1 = tf.placeholder(tf.float32, [None, n_input_1], name='l_input_1')
-        self.l_input_2 = tf.placeholder(tf.float32, [None, n_input_2], name='l_input_2')
-        self.l_input_3 = tf.placeholder(tf.float32, [None, n_input_3], name='l_input_3')
+        self.l_input_cur = tf.placeholder(tf.float32, [None] + dim_input_cur, name='l_input_cur')
+        self.l_input_chg = tf.placeholder(tf.float32, [None] + dim_input_chg, name='l_input_chg')
+
         #
-        w0_0 = tf.Variable(tf.random_uniform([n_input_0, n_hidden_1], minval=-max_v, maxval=max_v), name='w0_0')
-        w0_1 = tf.Variable(tf.random_uniform([n_input_1, n_hidden_1], minval=-max_v, maxval=max_v), name='w0_1')
-        w0_2 = tf.Variable(tf.random_uniform([n_input_2, n_hidden_1], minval=-max_v, maxval=max_v), name='w0_2')
-        w0_3 = tf.Variable(tf.random_uniform([n_input_3, n_hidden_1], minval=-max_v, maxval=max_v), name='w0_3')
-        b0 = tf.Variable(tf.zeros([n_hidden_1]), name='b0')
-        l_hidden_1_z = tf.add(tf.add(
-            tf.add(tf.matmul(self.l_input_0, w0_0), tf.matmul(self.l_input_1, w0_1)),
-            tf.add(tf.matmul(self.l_input_2, w0_2), tf.matmul(self.l_input_3, w0_3))), b0, name='l_hidden_1_z')
-        l_hidden_1_bn = bn(l_hidden_1_z, [0], n_hidden_1)
-        l_hidden_1 = activate(l_hidden_1_bn, name='l_hidden_1')
+        len_i_low = np.prod(dim_input_cur)
+        l_i_cur_flat = tf.reshape(self.l_input_cur, [-1, len_i_low])
+        l_i_chg_flat = tf.reshape(self.l_input_chg, [-1, len_i_low])
+
         #
+        l_i = tf.concat(1, [l_i_cur_flat, l_i_chg_flat])
+
         #
+        l_hidden_1 = fc(l_i, n_hidden_1, 'l_hidden_1')
         l_hidden_2 = fc(l_hidden_1, n_hidden_2, 'l_hidden_2')
         l_hidden_3 = fc(l_hidden_2, n_hidden_3, 'l_hidden_3')
         l_hidden_4 = fc(l_hidden_3, n_hidden_4, 'l_hidden_4')
         l_hidden_5 = fc(l_hidden_4, n_hidden_5, 'l_hidden_5')
+        #
         l_output = fc(l_hidden_5, n_output, 'l_output')
         #
         self.l_output = tf.nn.softmax(l_output, name='l_output_softmax')
@@ -144,16 +137,10 @@ class Experiences:
         self.rollp = 0  # rolling pointer
         
         #
-        obsrv_low_dim = int(config['Atari']['SCREEN_LOW_X']) * int(config['Atari']['SCREEN_LOW_Y'])
-        obsrv_low_diff_dim = obsrv_low_dim
-        obsrv_vlow_dim = int(config['Atari']['SCREEN_VERY_LOW_X']) * int(config['Atari']['SCREEN_VERY_LOW_Y'])
-        obsrv_vlow_diff_dim = obsrv_vlow_dim
         actions_n = int(config['Breakout']['ACTION_N'])
 
-        self.exs['obsrv_low'] = np.empty((ex_max, obsrv_low_dim))
-        self.exs['obsrv_low_diff'] = np.empty((ex_max, obsrv_low_diff_dim))
-        self.exs['obsrv_vlow'] = np.empty((ex_max, obsrv_vlow_dim))
-        self.exs['obsrv_vlow_diff'] = np.empty((ex_max, obsrv_vlow_diff_dim))
+        self.exs['obsrv_cur'] = np.empty([ex_max] + dim_input_cur)
+        self.exs['obsrv_chg'] = np.empty([ex_max] + dim_input_chg)
         self.exs['actions'] = np.empty((ex_max, actions_n), dtype=np.float)
         self.exs['actions_done'] = np.empty((ex_max, actions_n), dtype=np.bool)
         self.exs['rewards'] = np.empty(ex_max)
@@ -201,7 +188,8 @@ class Experiences:
 class GymPlayer:
 
     @staticmethod
-    def screen_shrink(data, x, y, z):
+    def screen_shrink(data, dim):
+        [x, y, z] = dim
         return data.reshape(
             x, int(data.shape[0] / x),
             y, int(data.shape[1] / y),
@@ -244,10 +232,6 @@ class GymPlayer:
 
         #
         t_max = int(config['Learn']['T_MAX'])
-        s_low_x = int(config['Atari']['SCREEN_LOW_X'])
-        s_low_y = int(config['Atari']['SCREEN_LOW_Y'])
-        s_vlow_x = int(config['Atari']['SCREEN_VERY_LOW_X'])
-        s_vlow_y = int(config['Atari']['SCREEN_VERY_LOW_Y'])
         decay = float(config['Learn']['DECAY'])
         action_n = int(config['Breakout']['ACTION_N'])
         action_offset = int(config['Breakout']['ACTION_OFFSET'])
@@ -267,9 +251,9 @@ class GymPlayer:
             total_reward = 0
 
             #
-            prev_frame_low = np.zeros(s_low_x * s_low_y, dtype=np.int8)
-            prev_frame_vlow = np.zeros(s_vlow_x * s_vlow_y, dtype=np.int8)
+            frame_cur = np.zeros(dim_input_cur)
 
+            #
             for t in range(t_max):
 
                 ept = self.ept
@@ -281,24 +265,16 @@ class GymPlayer:
                     time.sleep(float(config['Atari']['RENDER_SLEEP']))
 
                 #
-                frame_low = np.array(self.screen_shrink(observation, s_low_x, s_low_y, 1).mean(axis=2) > 0,
-                                     dtype=np.int8).flatten()
-                frame_low_diff = frame_low - prev_frame_low
-                prev_frame_low = frame_low
-                #
-                frame_vlow = np.array(self.screen_shrink(observation, s_vlow_x, s_vlow_y, 1).mean(axis=2) > 0,
-                                      dtype=np.int8).flatten()
-                frame_vlow_diff = frame_vlow - prev_frame_vlow
-                prev_frame_vlow = frame_vlow
+                frame_prev = frame_cur
+                frame_cur = GymPlayer.screen_shrink(observation, dim_input_cur)
+                frame_chg = frame_cur - frame_prev
 
                 #
                 [actions] = pn.sess.run(
                     [pn.l_output],
                     feed_dict={
-                        pn.l_input_0: frame_low.reshape((1, -1)),
-                        pn.l_input_1: frame_low_diff.reshape((1, -1)),
-                        pn.l_input_2: frame_vlow.reshape((1, -1)),
-                        pn.l_input_3: frame_vlow_diff.reshape((1, -1)),
+                        pn.l_input_cur: frame_cur.reshape([1] + dim_input_cur),
+                        pn.l_input_chg: frame_chg.reshape([1] + dim_input_chg),
                         pn.training: False
                     })
 
@@ -319,10 +295,8 @@ class GymPlayer:
                 actions_done[action] = True
 
                 # save
-                exs.set('obsrv_low', ept, frame_low)
-                exs.set('obsrv_low_diff', ept, frame_low_diff)
-                exs.set('obsrv_vlow', ept, frame_vlow)
-                exs.set('obsrv_vlow_diff', ept, frame_vlow_diff)
+                exs.set('obsrv_cur', ept, frame_cur)
+                exs.set('obsrv_chg', ept, frame_chg)
                 exs.set('actions', ept, actions)
                 exs.set('actions_done', ept, actions_done)
                 exs.set('rewards', ept, 0)
@@ -412,7 +386,8 @@ class GymTrainer:
         for my_i in range(player_n):
             self.gps.append(GymPlayer(my_i, self.pn))
 
-        self.past_exs = Experiences(int(config['Learn']['HISTORY_EX_MAX']))
+        if config.getboolean('Learn', 'USE_PAST_EX'):
+            self.past_exs = Experiences(int(config['Learn']['HISTORY_EX_MAX']))
 
         #
         self.avg_reward_history = []
@@ -470,10 +445,8 @@ class GymTrainer:
 
             pn = self.pn
 
-            exs_obsrv_low = exs.get('obsrv_low')
-            exs_obsrv_low_diff = exs.get('obsrv_low_diff')
-            exs_obsrv_vlow = exs.get('obsrv_vlow')
-            exs_obsrv_vlow_diff = exs.get('obsrv_vlow_diff')
+            exs_obsrv_cur = exs.get('obsrv_cur')
+            exs_obsrv_chg = exs.get('obsrv_chg')
             exs_better_actions = exs.get('better_actions')
             exs_decays = exs.get('decays')
 
@@ -482,10 +455,8 @@ class GymTrainer:
                 [xe, _] = pn.sess.run(
                     [pn.cross_entropy, pn.optimize],
                     feed_dict={
-                        pn.l_input_0: exs_obsrv_low,
-                        pn.l_input_1: exs_obsrv_low_diff,
-                        pn.l_input_2: exs_obsrv_vlow,
-                        pn.l_input_3: exs_obsrv_vlow_diff,
+                        pn.l_input_cur: exs_obsrv_cur,
+                        pn.l_input_chg: exs_obsrv_chg,
                         pn.l_better_output: exs_better_actions,
                         pn.f_decays: exs_decays,
                         pn.training: True
