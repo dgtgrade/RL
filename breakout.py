@@ -35,6 +35,11 @@ class BreakoutPolicyNetwork:
         n_hidden_3 = int(config['NeuralNetwork']['N_HIDDEN_3'])
         n_hidden_4 = int(config['NeuralNetwork']['N_HIDDEN_4'])
         n_hidden_5 = int(config['NeuralNetwork']['N_HIDDEN_5'])
+        n_conv_1 = int(config['NeuralNetwork']['N_CONV_1'])
+        n_conv_2 = int(config['NeuralNetwork']['N_CONV_2'])
+        n_conv_3 = int(config['NeuralNetwork']['N_CONV_3'])
+        n_conv_4 = int(config['NeuralNetwork']['N_CONV_4'])
+        n_conv_5 = int(config['NeuralNetwork']['N_CONV_5'])
         n_output = int(config['Breakout']['ACTION_N'])
 
         #
@@ -60,20 +65,34 @@ class BreakoutPolicyNetwork:
 
             return tf.nn.batch_normalization(z, mean, var, beta, gamma, epsilon)
 
-        def fc(l_prev, n_cur, name='fc'):
+        def fc(l_prev, n_node, name='fc'):
 
             n_prev = l_prev.get_shape().as_list()[-1]
-            w = tf.Variable(tf.random_uniform([n_prev, n_cur], minval=-max_v, maxval=max_v), name=name + '_w')
-            b = tf.Variable(tf.zeros([n_cur]), name=name + '_b')
+            w = tf.Variable(tf.random_uniform([n_prev, n_node], minval=-max_v, maxval=max_v), name=name + '_w')
+            b = tf.Variable(tf.zeros([n_node]), name=name + '_b')
             l_cur_z = tf.add(tf.matmul(l_prev, w), b, name=name + '_z')
-            l_cur_bn = bn(l_cur_z, [0], n_cur)
+            l_cur_bn = bn(l_cur_z, [0], n_node)
             l_cur = activate(l_cur_bn, name=name)
             return l_cur
+
+        def conv_half(l_prev, n_filter, name='conv'):
+
+            n_prev = l_prev.get_shape().as_list()[-1]
+
+            w = tf.Variable(tf.truncated_normal([3, 3, n_prev, n_filter]))
+            b = tf.Variable(tf.zeros([n_filter]))
+
+            l_cur_z = tf.add(tf.nn.conv2d(l_prev, w, [1, 2, 2, 1], padding='SAME'), b)
+            l_cur_bn = bn(l_cur_z, [0, 1, 2], n_filter)
+            l_cur = activate(l_cur_bn, name=name)
+            return l_cur
+
 
         #
         self.l_input_cur = tf.placeholder(tf.float32, [None] + dim_input, name='l_input_cur')
         self.l_input_chg = tf.placeholder(tf.float32, [None] + dim_input, name='l_input_chg')
 
+        # fully-connected
         #
         dim_vlow = [math.ceil(d / 2) for d in dim_input]
         l_vlow_cur = tf.image.resize_bilinear(self.l_input_cur, dim_vlow[:-1])
@@ -96,8 +115,18 @@ class BreakoutPolicyNetwork:
         l_hidden_3 = fc(l_hidden_2, n_hidden_3, 'l_hidden_3')
         l_hidden_4 = fc(l_hidden_3, n_hidden_4, 'l_hidden_4')
         l_hidden_5 = fc(l_hidden_4, n_hidden_5, 'l_hidden_5')
+        
+        # convolutional
         #
-        l_output = fc(l_hidden_5, n_output, 'l_output')
+        l_conv_1 = conv_half(tf.concat(3, [self.l_input_cur, self.l_input_chg]), n_conv_1)
+        l_conv_2 = conv_half(l_conv_1, n_conv_2)
+        l_conv_3 = conv_half(l_conv_2, n_conv_3)
+        l_conv_4 = conv_half(l_conv_3, n_conv_4)
+        l_conv_5 = conv_half(l_conv_4, n_conv_5)
+        l_conv_flat = tf.reshape(l_conv_5, [-1, np.prod(l_conv_5.get_shape().as_list()[1:4])])
+
+        #
+        l_output = fc(tf.concat(1, [l_hidden_5, l_conv_flat]), n_output, 'l_output')
         #
         self.l_output = tf.nn.softmax(l_output, name='l_output_softmax')
         #
@@ -265,6 +294,7 @@ class GymPlayer:
             #
             for t in range(t_max):
 
+                #
                 ept = self.ept
                 exs = self.exs
 
