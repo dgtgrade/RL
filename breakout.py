@@ -2,6 +2,7 @@
 import gym.wrappers
 import numpy as np
 import time
+import math
 import tensorflow as tf
 # import matplotlib.pyplot as plt
 import configparser
@@ -16,8 +17,7 @@ assert int(config['Atari']['SCREEN_X']) % int(config['Atari']['SCREEN_LOW_X']) =
 assert int(config['Atari']['SCREEN_Y']) % int(config['Atari']['SCREEN_LOW_Y']) == 0
 
 #
-dim_input_cur = [int(config['Atari']['SCREEN_LOW_X']), int(config['Atari']['SCREEN_LOW_Y']), 1]
-dim_input_chg = dim_input_cur
+dim_input = [int(config['Atari']['SCREEN_LOW_X']), int(config['Atari']['SCREEN_LOW_Y']), 1]
 
 #
 class BreakoutPolicyNetwork:
@@ -71,16 +71,24 @@ class BreakoutPolicyNetwork:
             return l_cur
 
         #
-        self.l_input_cur = tf.placeholder(tf.float32, [None] + dim_input_cur, name='l_input_cur')
-        self.l_input_chg = tf.placeholder(tf.float32, [None] + dim_input_chg, name='l_input_chg')
+        self.l_input_cur = tf.placeholder(tf.float32, [None] + dim_input, name='l_input_cur')
+        self.l_input_chg = tf.placeholder(tf.float32, [None] + dim_input, name='l_input_chg')
 
         #
-        len_i_low = np.prod(dim_input_cur)
-        l_i_cur_flat = tf.reshape(self.l_input_cur, [-1, len_i_low])
-        l_i_chg_flat = tf.reshape(self.l_input_chg, [-1, len_i_low])
+        dim_vlow = [math.ceil(d / 2) for d in dim_input]
+        l_vlow_cur = tf.image.resize_bilinear(self.l_input_cur, dim_vlow[:-1])
+        l_vlow_chg = tf.image.resize_bilinear(self.l_input_chg, dim_vlow[:-1])
 
         #
-        l_i = tf.concat(1, [l_i_cur_flat, l_i_chg_flat])
+        len_input = np.prod(dim_input)
+        len_vlow = np.prod(dim_vlow)
+        l_i_cur_flat = tf.reshape(self.l_input_cur, [-1, len_input])
+        l_i_chg_flat = tf.reshape(self.l_input_chg, [-1, len_input])
+        l_vlow_cur_flat = tf.reshape(l_vlow_cur, [-1, len_vlow])
+        l_vlow_chg_flat = tf.reshape(l_vlow_chg, [-1, len_vlow])
+
+        #
+        l_i = tf.concat(1, [l_i_cur_flat, l_i_chg_flat, l_vlow_cur_flat, l_vlow_chg_flat])
 
         #
         l_hidden_1 = fc(l_i, n_hidden_1, 'l_hidden_1')
@@ -139,8 +147,8 @@ class Experiences:
         #
         actions_n = int(config['Breakout']['ACTION_N'])
 
-        self.exs['obsrv_cur'] = np.empty([ex_max] + dim_input_cur)
-        self.exs['obsrv_chg'] = np.empty([ex_max] + dim_input_chg)
+        self.exs['obsrv_cur'] = np.empty([ex_max] + dim_input)
+        self.exs['obsrv_chg'] = np.empty([ex_max] + dim_input)
         self.exs['actions'] = np.empty((ex_max, actions_n), dtype=np.float)
         self.exs['actions_done'] = np.empty((ex_max, actions_n), dtype=np.bool)
         self.exs['rewards'] = np.empty(ex_max)
@@ -190,6 +198,7 @@ class GymPlayer:
     @staticmethod
     def screen_shrink(data, dim):
         [x, y, z] = dim
+        assert z == 1
         return data.reshape(
             x, int(data.shape[0] / x),
             y, int(data.shape[1] / y),
@@ -251,7 +260,7 @@ class GymPlayer:
             total_reward = 0
 
             #
-            frame_cur = np.zeros(dim_input_cur)
+            frame_cur = np.zeros(dim_input)
 
             #
             for t in range(t_max):
@@ -266,15 +275,15 @@ class GymPlayer:
 
                 #
                 frame_prev = frame_cur
-                frame_cur = GymPlayer.screen_shrink(observation, dim_input_cur)
+                frame_cur = GymPlayer.screen_shrink(observation, dim_input)
                 frame_chg = frame_cur - frame_prev
 
                 #
                 [actions] = pn.sess.run(
                     [pn.l_output],
                     feed_dict={
-                        pn.l_input_cur: frame_cur.reshape([1] + dim_input_cur),
-                        pn.l_input_chg: frame_chg.reshape([1] + dim_input_chg),
+                        pn.l_input_cur: frame_cur.reshape([1] + dim_input),
+                        pn.l_input_chg: frame_chg.reshape([1] + dim_input),
                         pn.training: False
                     })
 
