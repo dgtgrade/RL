@@ -30,11 +30,11 @@ class BreakoutPolicyNetwork:
         max_v = 0.1
         learning_rate = float(config['Learn']['LEARNING_RATE'])
 
-        n_hidden_1 = int(config['NeuralNetwork']['N_HIDDEN_1'])
-        n_hidden_2 = int(config['NeuralNetwork']['N_HIDDEN_2'])
-        n_hidden_3 = int(config['NeuralNetwork']['N_HIDDEN_3'])
-        n_hidden_4 = int(config['NeuralNetwork']['N_HIDDEN_4'])
-        n_hidden_5 = int(config['NeuralNetwork']['N_HIDDEN_5'])
+        # n_hidden_1 = int(config['NeuralNetwork']['N_HIDDEN_1'])
+        # n_hidden_2 = int(config['NeuralNetwork']['N_HIDDEN_2'])
+        # n_hidden_3 = int(config['NeuralNetwork']['N_HIDDEN_3'])
+        # n_hidden_4 = int(config['NeuralNetwork']['N_HIDDEN_4'])
+        # n_hidden_5 = int(config['NeuralNetwork']['N_HIDDEN_5'])
         n_conv_1 = int(config['NeuralNetwork']['N_CONV_1'])
         n_conv_2 = int(config['NeuralNetwork']['N_CONV_2'])
         n_conv_3 = int(config['NeuralNetwork']['N_CONV_3'])
@@ -82,10 +82,13 @@ class BreakoutPolicyNetwork:
             w = tf.Variable(tf.truncated_normal([5, 5, n_prev, n_filter]))
             b = tf.Variable(tf.zeros([n_filter]))
 
-            l_cur_z = tf.add(tf.nn.conv2d(l_prev, w, [1, 2, 2, 1], padding='SAME'), b)
-            l_cur_bn = bn(l_cur_z, [0, 1, 2], n_filter)
-            l_cur = activate(l_cur_bn, name=name)
-            return l_cur
+            l_z = tf.add(tf.nn.conv2d(l_prev, w, [1, 1, 1, 1], padding='SAME'), b)
+            l_bn = bn(l_z, [0, 1, 2], n_filter)
+            l_a = activate(l_bn, name=name)
+
+            l_max = tf.nn.max_pool(l_a, [1, 2, 2, 1], [1, 2, 2, 1], padding='SAME')
+
+            return l_max
 
 
         #
@@ -94,27 +97,27 @@ class BreakoutPolicyNetwork:
 
         # fully-connected
         #
-        dim_vlow = [math.ceil(d / 2) for d in dim_input]
-        l_vlow_cur = tf.image.resize_bilinear(self.l_input_cur, dim_vlow[:-1])
-        l_vlow_chg = tf.image.resize_bilinear(self.l_input_chg, dim_vlow[:-1])
+        # dim_vlow = [math.ceil(d / 2) for d in dim_input]
+        # l_vlow_cur = tf.image.resize_bilinear(self.l_input_cur, dim_vlow[:-1])
+        # l_vlow_chg = tf.image.resize_bilinear(self.l_input_chg, dim_vlow[:-1])
 
         #
-        len_input = np.prod(dim_input)
-        len_vlow = np.prod(dim_vlow)
-        l_i_cur_flat = tf.reshape(self.l_input_cur, [-1, len_input])
-        l_i_chg_flat = tf.reshape(self.l_input_chg, [-1, len_input])
-        l_vlow_cur_flat = tf.reshape(l_vlow_cur, [-1, len_vlow])
-        l_vlow_chg_flat = tf.reshape(l_vlow_chg, [-1, len_vlow])
+        # len_input = np.prod(dim_input)
+        # len_vlow = np.prod(dim_vlow)
+        # l_i_cur_flat = tf.reshape(self.l_input_cur, [-1, len_input])
+        # l_i_chg_flat = tf.reshape(self.l_input_chg, [-1, len_input])
+        # l_vlow_cur_flat = tf.reshape(l_vlow_cur, [-1, len_vlow])
+        # l_vlow_chg_flat = tf.reshape(l_vlow_chg, [-1, len_vlow])
 
         #
-        l_i = tf.concat(1, [l_i_cur_flat, l_i_chg_flat, l_vlow_cur_flat, l_vlow_chg_flat])
+        # l_i = tf.concat(1, [l_i_cur_flat, l_i_chg_flat, l_vlow_cur_flat, l_vlow_chg_flat])
 
         #
-        l_hidden_1 = fc(l_i, n_hidden_1, 'l_hidden_1')
-        l_hidden_2 = fc(l_hidden_1, n_hidden_2, 'l_hidden_2')
-        l_hidden_3 = fc(l_hidden_2, n_hidden_3, 'l_hidden_3')
-        l_hidden_4 = fc(l_hidden_3, n_hidden_4, 'l_hidden_4')
-        l_hidden_5 = fc(l_hidden_4, n_hidden_5, 'l_hidden_5')
+        # l_hidden_1 = fc(l_i, n_hidden_1, 'l_hidden_1')
+        # l_hidden_2 = fc(l_hidden_1, n_hidden_2, 'l_hidden_2')
+        # l_hidden_3 = fc(l_hidden_2, n_hidden_3, 'l_hidden_3')
+        # l_hidden_4 = fc(l_hidden_3, n_hidden_4, 'l_hidden_4')
+        # l_hidden_5 = fc(l_hidden_4, n_hidden_5, 'l_hidden_5')
         
         # convolutional
         #
@@ -126,9 +129,11 @@ class BreakoutPolicyNetwork:
         l_conv_flat = tf.reshape(l_conv_5, [-1, np.prod(l_conv_5.get_shape().as_list()[1:4])])
 
         #
-        l_output = fc(tf.concat(1, [l_hidden_5, l_conv_flat]), n_output, 'l_output')
+        # l_output = fc(tf.concat(1, [l_hidden_5, l_conv_flat]), n_output, 'l_output')
         #
-        self.l_output = tf.nn.softmax(l_output, name='l_output_softmax')
+        l_output_a = fc(l_conv_flat, n_output, 'l_output_a')
+        #
+        self.l_output = tf.nn.softmax(l_output_a, name='l_output_softmax')
         #
         self.l_better_output = tf.placeholder(tf.float32, [None, n_output], name='l_better_output')
         #
