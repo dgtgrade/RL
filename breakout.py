@@ -79,7 +79,7 @@ class BreakoutPolicyNetwork:
 
             n_prev = l_prev.get_shape().as_list()[-1]
 
-            w = tf.Variable(tf.truncated_normal([3, 3, n_prev, n_filter]))
+            w = tf.Variable(tf.truncated_normal([5, 5, n_prev, n_filter]))
             b = tf.Variable(tf.zeros([n_filter]))
 
             l_cur_z = tf.add(tf.nn.conv2d(l_prev, w, [1, 2, 2, 1], padding='SAME'), b)
