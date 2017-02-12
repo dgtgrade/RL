@@ -1,10 +1,8 @@
-# import gym
 import gym.wrappers
 import numpy as np
 import time
 import math
 import tensorflow as tf
-# import matplotlib.pyplot as plt
 import configparser
 import threading
 
@@ -17,7 +15,13 @@ assert int(config['Atari']['SCREEN_X']) % int(config['Atari']['SCREEN_LOW_X']) =
 assert int(config['Atari']['SCREEN_Y']) % int(config['Atari']['SCREEN_LOW_Y']) == 0
 
 #
-dim_input = [int(config['Atari']['SCREEN_LOW_X']), int(config['Atari']['SCREEN_LOW_Y']), 1]
+np.set_printoptions(linewidth=np.nan, threshold=np.nan, formatter={'float_kind': lambda x: "%4.2f" % x})
+
+#
+dim_input = [int(config['Atari']['SCREEN_LOW_Y']),
+             int(config['Atari']['SCREEN_LOW_X']),
+             int(config['Atari']['SCREEN_LOW_Z'])]
+
 
 #
 class BreakoutPolicyNetwork:
@@ -26,33 +30,31 @@ class BreakoutPolicyNetwork:
 
         # Tensorflow Policy network
         #
-        activate = tf.nn.relu
         max_v = 0.1
-        learning_rate = float(config['Learn']['LEARNING_RATE'])
+        learning_rate = float(config['PolicyNetwork']['LEARNING_RATE'])
 
-        # n_hidden_1 = int(config['NeuralNetwork']['N_HIDDEN_1'])
-        # n_hidden_2 = int(config['NeuralNetwork']['N_HIDDEN_2'])
-        # n_hidden_3 = int(config['NeuralNetwork']['N_HIDDEN_3'])
-        # n_hidden_4 = int(config['NeuralNetwork']['N_HIDDEN_4'])
-        # n_hidden_5 = int(config['NeuralNetwork']['N_HIDDEN_5'])
-        n_conv_1 = int(config['NeuralNetwork']['N_CONV_1'])
-        n_conv_2 = int(config['NeuralNetwork']['N_CONV_2'])
-        n_conv_3 = int(config['NeuralNetwork']['N_CONV_3'])
-        n_conv_4 = int(config['NeuralNetwork']['N_CONV_4'])
-        n_conv_5 = int(config['NeuralNetwork']['N_CONV_5'])
-        n_output = int(config['Breakout']['ACTION_N'])
+        #
+        n_conv_1 = int(config['PolicyNetwork']['N_CONV_1'])
+        n_conv_2 = int(config['PolicyNetwork']['N_CONV_2'])
+        n_conv_3 = int(config['PolicyNetwork']['N_CONV_3'])
+        n_conv_4 = int(config['PolicyNetwork']['N_CONV_4'])
+        #
+        n_fc_1 = int(config['PolicyNetwork']['N_FC_1'])
+        n_fc_2 = int(config['PolicyNetwork']['N_FC_2'])
+        #
+        n_action = int(config['Breakout']['ACTION_N'])
 
         #
         self.training = tf.placeholder(tf.bool)
 
         #
-        def bn(z, axes, n):
+        def bn(z, axes, n, name='bn'):
             mean, var = tf.nn.moments(z, axes=axes)
             beta = tf.Variable(tf.constant(0.0, shape=[n]))
             gamma = tf.Variable(tf.constant(1.0, shape=[n]))
-            epsilon = 1e-3
+            epsilon = 1e-5
 
-            ema = tf.train.ExponentialMovingAverage(decay=float(config['Learn']['BN_Decay']))
+            ema = tf.train.ExponentialMovingAverage(decay=float(config['PolicyNetwork']['BN_Decay']))
 
             def mean_var_with_update():
                 ema_apply_op = ema.apply([mean, var])
@@ -63,93 +65,95 @@ class BreakoutPolicyNetwork:
                                 mean_var_with_update,
                                 lambda: (ema.average(mean), ema.average(var)))
 
-            return tf.nn.batch_normalization(z, mean, var, beta, gamma, epsilon)
+            return tf.nn.batch_normalization(z, mean, var, beta, gamma, epsilon, name=name)
 
-        def fc(l_prev, n_node, name='fc'):
+        def conv(l_prv, n_filter, f, s=1, activate=tf.nn.relu, name='conv'):
 
-            n_prev = l_prev.get_shape().as_list()[-1]
-            w = tf.Variable(tf.random_uniform([n_prev, n_node], minval=-max_v, maxval=max_v), name=name + '_w')
-            b = tf.Variable(tf.zeros([n_node]), name=name + '_b')
-            l_cur_z = tf.add(tf.matmul(l_prev, w), b, name=name + '_z')
-            l_cur_bn = bn(l_cur_z, [0], n_node)
-            l_cur = activate(l_cur_bn, name=name)
+            n_prv = l_prv.get_shape().as_list()[-1]
+
+            w = tf.Variable(tf.truncated_normal([f, f, n_prv, n_filter]), name=name + '_w')
+            b = tf.Variable(tf.ones([n_filter]), name=name + '_b')
+            l_z = tf.add(tf.nn.conv2d(l_prv, w, [1, s, s, 1], padding='SAME'), b, name=name + '_z')
+            l_a = activate(l_z, name=name + '_a')
+
+            return l_a
+
+        def ccconv(l_prv, n_filter, activate=tf.nn.relu, name='conv'):
+
+            l_a00 = conv(l_prv, n_filter, 1, s=1, activate=activate, name=name)
+            l_a01 = conv(l_a00, n_filter, 3, s=2, activate=activate, name=name)
+            l_a10 = conv(l_prv, n_filter, 1, s=1, activate=activate, name=name)
+            l_a11 = conv(l_a10, n_filter, 6, s=2, activate=activate, name=name)
+            l_a20 = conv(l_prv, n_filter, 1, s=1, activate=activate, name=name)
+            l_a21 = conv(l_a20, n_filter, 9, s=2, activate=activate, name=name)
+
+            l_c = tf.concat(3, [l_a01, l_a11, l_a21])
+
+            l_bn = bn(l_c, [0, 1, 2], n_filter*3, name=name + '_bn')
+
+            return l_bn
+
+        def fc(l_prv, n_node, activate=tf.identity, name='fc'):
+
+            n_prv = l_prv.get_shape().as_list()[-1]
+            w = tf.Variable(tf.random_uniform([n_prv, n_node], minval=-max_v, maxval=max_v), name=name + '_w')
+            b = tf.Variable(tf.ones([n_node]), name=name + '_b')
+            l_cur_z = tf.add(tf.matmul(l_prv, w), b, name=name + '_z')
+            # l_cur_bn = bn(l_cur_z, [0], n_node, name=name + '_bn')
+            l_cur = activate(l_cur_z, name=name + '_a')
+
             return l_cur
 
-        def conv_half(l_prev, n_filter, name='conv'):
-
-            n_prev = l_prev.get_shape().as_list()[-1]
-
-            w = tf.Variable(tf.truncated_normal([5, 5, n_prev, n_filter]))
-            b = tf.Variable(tf.zeros([n_filter]))
-
-            l_z = tf.add(tf.nn.conv2d(l_prev, w, [1, 1, 1, 1], padding='SAME'), b)
-            l_bn = bn(l_z, [0, 1, 2], n_filter)
-            l_a = activate(l_bn, name=name)
-
-            l_max = tf.nn.max_pool(l_a, [1, 2, 2, 1], [1, 2, 2, 1], padding='SAME')
-
-            return l_max
-
-
         #
-        self.l_input_cur = tf.placeholder(tf.float32, [None] + dim_input, name='l_input_cur')
-        self.l_input_chg = tf.placeholder(tf.float32, [None] + dim_input, name='l_input_chg')
+        self.l_obsrv_cur0 = tf.placeholder(tf.float32, [None] + dim_input, name='l_obsrv_cur0')
+        self.l_obsrv_chg1 = tf.placeholder(tf.float32, [None] + dim_input, name='l_obsrv_chg1')
+        self.l_obsrv_chg2 = tf.placeholder(tf.float32, [None] + dim_input, name='l_obsrv_chg2')
+        self.l_obsrv_chg3 = tf.placeholder(tf.float32, [None] + dim_input, name='l_obsrv_chg3')
 
-        # fully-connected
-        #
-        # dim_vlow = [math.ceil(d / 2) for d in dim_input]
-        # l_vlow_cur = tf.image.resize_bilinear(self.l_input_cur, dim_vlow[:-1])
-        # l_vlow_chg = tf.image.resize_bilinear(self.l_input_chg, dim_vlow[:-1])
+        l_input = tf.concat(
+            3, [self.l_obsrv_cur0, self.l_obsrv_chg1, self.l_obsrv_chg2, self.l_obsrv_chg3], name='l_input')
+
+        l_conv_1 = ccconv(l_input, n_conv_1, name='conv1')
+        l_conv_2 = ccconv(l_conv_1, n_conv_2, name='conv2')
+        l_conv_3 = ccconv(l_conv_2, n_conv_3, name='conv3')
+        l_conv_4 = ccconv(l_conv_3, n_conv_4, name='conv4')
+
+        l_conv_flat = tf.reshape(l_conv_4, [-1, np.prod(l_conv_4.get_shape().as_list()[1:4])], name='conv_flat')
+
+        l_fc_1 = fc(l_conv_flat, n_fc_1, activate=tf.nn.relu, name='l_fc_1')
+        l_fc_2 = fc(l_fc_1, n_fc_2, activate=tf.nn.relu, name='l_fc_2')
+
+        l_action_z = fc(l_fc_2, n_action, name='l_action_z')
 
         #
-        # len_input = np.prod(dim_input)
-        # len_vlow = np.prod(dim_vlow)
-        # l_i_cur_flat = tf.reshape(self.l_input_cur, [-1, len_input])
-        # l_i_chg_flat = tf.reshape(self.l_input_chg, [-1, len_input])
-        # l_vlow_cur_flat = tf.reshape(l_vlow_cur, [-1, len_vlow])
-        # l_vlow_chg_flat = tf.reshape(l_vlow_chg, [-1, len_vlow])
+        self.l_output = tf.nn.softmax(l_action_z)
+        #
+        self.i_actions_done = tf.placeholder(tf.float32, [None, n_action], name='i_actions_done')
+        self.i_actions_target = tf.placeholder(tf.float32, [None, n_action], name='i_actions_target')
 
-        #
-        # l_i = tf.concat(1, [l_i_cur_flat, l_i_chg_flat, l_vlow_cur_flat, l_vlow_chg_flat])
+        self.i_decayed_impacts = tf.placeholder(tf.float32, [None], name='i_decayed_impact')
 
-        #
-        # l_hidden_1 = fc(l_i, n_hidden_1, 'l_hidden_1')
-        # l_hidden_2 = fc(l_hidden_1, n_hidden_2, 'l_hidden_2')
-        # l_hidden_3 = fc(l_hidden_2, n_hidden_3, 'l_hidden_3')
-        # l_hidden_4 = fc(l_hidden_3, n_hidden_4, 'l_hidden_4')
-        # l_hidden_5 = fc(l_hidden_4, n_hidden_5, 'l_hidden_5')
-        
-        # convolutional
-        #
-        l_conv_1 = conv_half(tf.concat(3, [self.l_input_cur, self.l_input_chg]), n_conv_1)
-        l_conv_2 = conv_half(l_conv_1, n_conv_2)
-        l_conv_3 = conv_half(l_conv_2, n_conv_3)
-        l_conv_4 = conv_half(l_conv_3, n_conv_4)
-        l_conv_5 = conv_half(l_conv_4, n_conv_5)
-        l_conv_flat = tf.reshape(l_conv_5, [-1, np.prod(l_conv_5.get_shape().as_list()[1:4])])
+        self.loss = tf.reduce_mean(
+            self.i_decayed_impacts *
+            tf.reduce_sum(self.i_actions_done * (self.i_actions_target - self.l_output) ** 2, reduction_indices=[1]))
 
+        # self.loss = tf.reduce_mean(
+        #     self.i_decayed_impacts *
+        #     tf.reduce_sum(self.i_actions_done * self.i_actions_target * -tf.log(self.l_output),
+        #                   reduction_indices=[1]))
         #
-        # l_output = fc(tf.concat(1, [l_hidden_5, l_conv_flat]), n_output, 'l_output')
-        #
-        l_output_a = fc(l_conv_flat, n_output, 'l_output_a')
-        #
-        self.l_output = tf.nn.softmax(l_output_a, name='l_output_softmax')
-        #
-        self.l_better_output = tf.placeholder(tf.float32, [None, n_output], name='l_better_output')
-        #
-        self.f_decays = tf.placeholder(tf.float32, [None], name='f_decays')
-        #
-        self.cross_entropy = tf.reduce_mean(tf.multiply(
-            self.f_decays, -tf.reduce_sum(self.l_better_output * tf.log(tf.clip_by_value(self.l_output, 1e-3, 1.0)),
-                                          reduction_indices=[1])), name='decayed_cross_entropy')
-        #
-        self.optimize = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.cross_entropy)
+        # self.loss = tf.reduce_mean(
+        #     self.i_decayed_impacts *
+        #     tf.reduce_sum(self.i_actions_done * -tf.log(1 - 0.99*tf.abs(self.i_actions_target - self.l_output)),
+        #                   reduction_indices=[1]))
+
+        self.optimize = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.loss)
+
         #
         self.saver = tf.train.Saver()
         #
         self.sess = tf.Session()
-        self.sess.run(tf.global_variables_initializer(),
-                      feed_dict={self.training: True})
+        self.sess.run(tf.global_variables_initializer(), feed_dict={self.training: True})
 
         #
         self.restore()
@@ -181,13 +185,16 @@ class Experiences:
         #
         actions_n = int(config['Breakout']['ACTION_N'])
 
-        self.exs['obsrv_cur'] = np.empty([ex_max] + dim_input)
-        self.exs['obsrv_chg'] = np.empty([ex_max] + dim_input)
-        self.exs['actions'] = np.empty((ex_max, actions_n), dtype=np.float)
+        self.exs['obsrv_cur0'] = np.empty([ex_max] + dim_input, dtype=np.float16)
+        self.exs['obsrv_chg1'] = np.empty([ex_max] + dim_input, dtype=np.float16)
+        self.exs['obsrv_chg2'] = np.empty([ex_max] + dim_input, dtype=np.float16)
+        self.exs['obsrv_chg3'] = np.empty([ex_max] + dim_input, dtype=np.float16)
+
+        self.exs['actions'] = np.empty((ex_max, actions_n), dtype=np.int8)
         self.exs['actions_done'] = np.empty((ex_max, actions_n), dtype=np.bool)
-        self.exs['rewards'] = np.empty(ex_max)
-        self.exs['better_actions'] = np.empty((ex_max, actions_n), dtype=np.float)
-        self.exs['decays'] = np.empty(ex_max)
+        self.exs['actions_target'] = np.empty((ex_max, actions_n), dtype=np.int8)
+
+        self.exs['decayed_impacts'] = np.empty(ex_max, dtype=np.float16)
 
     def set(self, ex_key, ex_i, ex):
         self.exs[ex_key][ex_i] = ex
@@ -232,13 +239,12 @@ class GymPlayer:
     @staticmethod
     def screen_shrink(data, dim):
         [x, y, z] = dim
-        assert z == 1
         return data.reshape(
             x, int(data.shape[0] / x),
             y, int(data.shape[1] / y),
             z, int(data.shape[2] / z)).mean(axis=(1, 3, 5))
 
-    def __init__(self, no, pn):
+    def __init__(self, no, pn, ep_n=1):
 
         self.no = no
 
@@ -247,12 +253,7 @@ class GymPlayer:
         self.pn = pn
 
         #
-        ep_n = int(config['Learn']['EPISODES_PER_RUN'])
-
-        #
-
-        #
-        self.exs = Experiences(ep_n * int(config['Learn']['T_MAX']))
+        self.exs = Experiences(ep_n * int(config['Player']['T_MAX']))
 
         #
         self.ept = -1
@@ -262,20 +263,19 @@ class GymPlayer:
 
         print("GymWorker #{:<2d} created".format(no))
 
-    def run_episodes(self, ep_n=1, render=False, p_adjust=0.1):
+    def run_episodes(self, ep_n=1):
 
         print("GymWorker #{:<2d} is running {} New Episodes...".format(self.no, ep_n))
-        thread = threading.Thread(target=self.run, args=(ep_n, render, p_adjust))
+        thread = threading.Thread(target=self.run, args=(ep_n,))
         thread.start()
         return thread
 
-    def run(self, ep_n=1, render=False, p_adjust=0.1):
+    def run(self, ep_n=1):
 
         pn = self.pn
 
         #
-        t_max = int(config['Learn']['T_MAX'])
-        decay = float(config['Learn']['DECAY'])
+        t_max = int(config['Player']['T_MAX'])
         action_n = int(config['Breakout']['ACTION_N'])
         action_offset = int(config['Breakout']['ACTION_OFFSET'])
 
@@ -294,7 +294,9 @@ class GymPlayer:
             total_reward = 0
 
             #
-            frame_cur = np.zeros(dim_input)
+            frame_cur0 = np.zeros(dim_input)
+            frame_prv1 = frame_cur0.copy()
+            frame_prv2 = frame_cur0.copy()
 
             #
             for t in range(t_max):
@@ -304,53 +306,56 @@ class GymPlayer:
                 exs = self.exs
 
                 #
-                if render:
-                    self.env.render()
-                    time.sleep(float(config['Atari']['RENDER_SLEEP']))
+                frame_prv3 = frame_prv2
+                frame_prv2 = frame_prv1
+                frame_prv1 = frame_cur0
+                frame_cur0 = GymPlayer.screen_shrink(observation/255.0, dim_input)
 
-                #
-                frame_prev = frame_cur
-                frame_cur = GymPlayer.screen_shrink(observation, dim_input)
-                frame_chg = frame_cur - frame_prev
+                frame_chg1 = frame_cur0 - frame_prv1
+                frame_chg2 = frame_cur0 - frame_prv2
+                frame_chg3 = frame_cur0 - frame_prv3
 
-                #
                 [actions] = pn.sess.run(
                     [pn.l_output],
                     feed_dict={
-                        pn.l_input_cur: frame_cur.reshape([1] + dim_input),
-                        pn.l_input_chg: frame_chg.reshape([1] + dim_input),
+                        pn.l_obsrv_cur0: frame_cur0.reshape([1] + dim_input),
+                        pn.l_obsrv_chg1: frame_chg1.reshape([1] + dim_input),
+                        pn.l_obsrv_chg2: frame_chg2.reshape([1] + dim_input),
+                        pn.l_obsrv_chg3: frame_chg3.reshape([1] + dim_input),
                         pn.training: False
                     })
 
-                # add noise
-                actions_noise = np.random.random(action_n) * float(config['Breakout']['ACTION_NOISE']) / action_n
-                actions_p = actions.flatten() + actions_noise
-                actions_p /= np.sum(actions_p)
-                #                #
-                action = np.random.choice(action_n, p=actions_p)
-                # action = np.random.randint(action_n)
+                if ep % 2 == 0:
+                    action_noise = float(config['Breakout']['ACTION_NOISE_0'])
+                else:
+                    action_noise = float(config['Breakout']['ACTION_NOISE_1'])
+
+                if np.random.random() < action_noise:
+                    action = np.random.randint(action_n)
+                else:
+                    action = np.argmax(actions)
 
                 # start a game
-                if ept - ept_start == 0:
+                if ept - ept_start < 3:
                     action = 0
 
+                # if self.no == 0:
+                #     print(actions, action)
                 #
                 actions_done = np.zeros(action_n, dtype=np.bool)
                 actions_done[action] = True
 
                 # save
-                exs.set('obsrv_cur', ept, frame_cur)
-                exs.set('obsrv_chg', ept, frame_chg)
+                exs.set('obsrv_cur0', ept, frame_cur0)
+                exs.set('obsrv_chg1', ept, frame_chg1)
+                exs.set('obsrv_chg2', ept, frame_chg2)
+                exs.set('obsrv_chg3', ept, frame_chg3)
                 exs.set('actions', ept, actions)
                 exs.set('actions_done', ept, actions_done)
-                exs.set('rewards', ept, 0)
+                exs.set('decayed_impacts', ept, 0)
 
                 #
                 observation, reward, done, info = self.env.step(action + action_offset)
-
-                #
-                # print("GymWorker #{:2d}: Episode {:3d}/{:<3d}: t#{:<5d}: action:{}, reward:{}, info:{} ".format(
-                #     self.no, ep, ep_n, t, action, reward, info))
 
                 total_reward += reward
                 info_lives = info['ale.lives']
@@ -371,28 +376,22 @@ class GymPlayer:
                 # got (plus or minus) reward
                 if reward != 0 or done or timeout:
 
-                    r_m = ept - ept_start + 1
-
-                    exs.set('rewards', slice(ept_start, ept+1), reward)
-
-                    r_better_actions = exs.get('actions', slice(ept_start, ept+1)).copy()
+                    r_actions_target = exs.get('actions', slice(ept_start, ept+1)).copy()
                     r_actions_done = exs.get('actions_done', slice(ept_start, ept+1))
 
-                    # DEBUG
-                    # print(np.mean(r_actions_done, axis=0, dtype=np.float))
+                    if reward > 0:
+                        r_actions_target[r_actions_done] = 1.0
+                        exs.set('actions_target', slice(ept_start, ept + 1), r_actions_target)
+                    elif reward == 0:
+                        r_actions_done = False
+                        exs.set('actions_done', slice(ept_start, ept + 1), r_actions_done)
+                    else:
+                        r_actions_target[r_actions_done] = 0.0
+                        exs.set('actions_target', slice(ept_start, ept + 1), r_actions_target)
 
-                    r_better_actions[r_actions_done] += reward * p_adjust
-                    r_better_actions[r_better_actions < 0] = 0
-                    r_better_actions[:, :] *= np.array(1.0 / r_better_actions.sum(axis=1)).reshape(-1, 1)
-
-                    assert np.count_nonzero(np.abs((r_better_actions.sum(axis=1)) - 1.0) > 0.01) == 0
-                    assert np.count_nonzero(r_better_actions < 0) == 0
-                    assert np.count_nonzero(r_better_actions > 1) == 0
-
-                    exs.set('better_actions', slice(ept_start, ept+1), r_better_actions)
-
-                    exs.set('decays', slice(ept_start, ept+1),
-                            np.array([decay ** (r_m - i - 1) for i in range(r_m)]))
+                    ts = ept + 1 - ept_start
+                    decay = float(config['Player']['IMPACT_DECAY']) ** np.arange(ts)[::-1]
+                    exs.set('decayed_impacts', slice(ept_start, ept + 1), decay / np.sum(decay) * abs(reward))
 
                     ept_start = ept + 1
 
@@ -404,10 +403,6 @@ class GymPlayer:
                     # TODO: automate setting m or rollp
                     self.exs.m = self.ept
                     self.exs.rollp = self.ept
-
-                    assert self.exs.exs['decays'][self.exs.m - 1] == 1
-                    assert np.count_nonzero(np.abs(
-                        np.sum(self.exs.exs['better_actions'][0:self.exs.m], axis=1) - 1.0) > 0.01) == 0
 
                     self.ep_total_rewards[ep] = total_reward
 
@@ -428,29 +423,27 @@ class GymTrainer:
 
         #
         for my_i in range(player_n):
-            self.gps.append(GymPlayer(my_i, self.pn))
+            self.gps.append(GymPlayer(my_i, self.pn, int(config['Trainer']['EPISODES_PER_RUN'])))
 
-        if config.getboolean('Learn', 'USE_PAST_EX'):
-            self.past_exs = Experiences(int(config['Learn']['HISTORY_EX_MAX']))
+        if config.getboolean('Trainer', 'PAST_EX_USE'):
+            self.past_exs = Experiences(int(config['Trainer']['PAST_EX_MAX']))
 
         #
         self.avg_reward_history = []
         self.max_reward_history = []
 
-    def play(self, render, p_adjust):
+    def play(self):
 
         threads = []
         for i, gp in enumerate(self.gps):
-            threads.append(gp.run_episodes(int(config['Learn']['EPISODES_PER_RUN']),
-                                           render=render,
-                                           p_adjust=p_adjust))
+            threads.append(gp.run_episodes(int(config['Trainer']['EPISODES_PER_RUN'])))
 
         for t in threads:
             t.join()
 
     def train(self):
 
-        print("Start training for {} iterations".format(int(config['Learn']['ITERATIONS_PER_LEARN'])))
+        print("Start training for {} iterations".format(int(config['Trainer']['EPOCHS_PER_LEARN'])))
 
         gps = self.gps
         gp_n = len(gps)
@@ -469,81 +462,105 @@ class GymTrainer:
             m, avg_reward, min_reward, max_reward))
 
         #
-        print_hist_n = 10
-        np.set_printoptions(formatter={'float_kind': lambda x: "%5.2f" % x})
-        print("last {} run reward avg: {}".format(print_hist_n, np.array(self.avg_reward_history[-print_hist_n:])))
-        print("                   max: {}".format(np.array(self.max_reward_history[-print_hist_n:])))
+        def moving_avg(a, n):
+            ma = np.cumsum(a, dtype=np.float)
+            ma[n:] = (ma[n:] - ma[:-n]) / n
+            ma[0:n] = ma[0:n] / np.arange(1, min(len(ma), n) + 1)
+            return ma
 
         #
-        if config.getboolean('Learn', 'USE_PAST_EX'):
+        print_hist_n = 100
+        moving_window = 10
+
+        print("last {} run reward stat:".format(print_hist_n))
+        print("avg:")
+        print(np.array(self.avg_reward_history[-print_hist_n:]))
+        print("last-{} avg:".format(moving_window))
+        print(moving_avg(np.array(self.avg_reward_history[-print_hist_n:]), moving_window))
+        print("max:")
+        print(np.array(self.max_reward_history[-print_hist_n:]))
+
+        #
+        if config.getboolean('Trainer', 'PAST_EX_USE'):
             past_exs = self.past_exs
             past_exs.concatenate([gps[i].exs for i in range(gp_n)])
             exs = past_exs
+
+            # sample expriences from past experiences, prefer recent expriences
+            mm = float(config['Trainer']['PAST_EX_MM'])
+            ex_is0 = (exs.rollp - np.arange(m)) % exs.m
+            ex_is1 = (exs.rollp - m -
+                      np.abs(np.random.uniform(0, exs.m - m, min(int(m*mm), exs.m-m))).astype(np.int)) % exs.m
+            ex_is = np.concatenate((ex_is0, ex_is1))
+            ex_m = len(ex_is)
+
             #
-            print("past total experiences: {:,}".format(past_exs.m))
+            print("learning past total experiences: {:,}/{:,}".format(ex_m, past_exs.m))
         else:
             exs = Experiences(m)
             exs.concatenate([gps[i].exs for i in range(gp_n)])
+            ex_is = np.arange(m)
+            ex_m = m
 
-        if exs.m > 0:
+        if ex_m > 0:
 
             pn = self.pn
 
-            exs_obsrv_cur = exs.get('obsrv_cur')
-            exs_obsrv_chg = exs.get('obsrv_chg')
-            exs_better_actions = exs.get('better_actions')
-            exs_decays = exs.get('decays')
+            mbs = int(config['Trainer']['MINI_BATCH_SIZE'])
 
-            mbs = int(config['Learn']['MINI_BATCH_SIZE'])
+            for i in range(int(config['Trainer']['EPOCHS_PER_LEARN'])):
 
-            for i in range(int(config['Learn']['ITERATIONS_PER_LEARN'])):
-
-                mbn = math.ceil(exs.m / mbs)
-                xe = np.empty(mbn)
+                mbn = math.ceil(ex_m / mbs)
+                loss = np.empty(mbn)
 
                 for j in range(mbn):
 
                     exs_start = mbs * j
                     exs_end = mbs * (j+1)
 
-                    [xe[j], _] = pn.sess.run(
-                        [pn.cross_entropy, pn.optimize],
+                    ex_mb = ex_is[exs_start:exs_end]
+
+                    exs_obsrv_cur0 = exs.get('obsrv_cur0', ex_mb)
+                    exs_obsrv_chg1 = exs.get('obsrv_chg1', ex_mb)
+                    exs_obsrv_chg2 = exs.get('obsrv_chg2', ex_mb)
+                    exs_obsrv_chg3 = exs.get('obsrv_chg3', ex_mb)
+                    exs_actions_done = exs.get('actions_done', ex_mb)
+                    exs_actions_target = exs.get('actions_target', ex_mb)
+                    exs_decayed_impacts = exs.get('decayed_impacts', ex_mb)
+
+                    [loss[j], _] = pn.sess.run(
+                        [pn.loss, pn.optimize],
                         feed_dict={
-                            pn.l_input_cur: exs_obsrv_cur[exs_start:exs_end],
-                            pn.l_input_chg: exs_obsrv_chg[exs_start:exs_end],
-                            pn.l_better_output: exs_better_actions[exs_start:exs_end],
-                            pn.f_decays: exs_decays[exs_start:exs_end],
+                            pn.l_obsrv_cur0: exs_obsrv_cur0,
+                            pn.l_obsrv_chg1: exs_obsrv_chg1,
+                            pn.l_obsrv_chg2: exs_obsrv_chg2,
+                            pn.l_obsrv_chg3: exs_obsrv_chg3,
+                            pn.i_actions_done: exs_actions_done,
+                            pn.i_actions_target: exs_actions_target,
+                            pn.i_decayed_impacts: exs_decayed_impacts,
                             pn.training: True
                         })
 
-                if (i % int(config['Learn']['PRINT_PER_ITERATIONS']) == 0 or
-                        i == int(config['Learn']['ITERATIONS_PER_LEARN']) - 1):
+                if (i % int(config['Trainer']['PRINT_PER_EPOCHS']) == 0 or
+                        i == int(config['Trainer']['EPOCHS_PER_LEARN']) - 1):
 
-                    print("learn #{:<5d}: cross entropy: {:7.4f}".format(i, np.mean(xe)))
+                    print("learn #{:<5d}: loss: {:11.9f}".format(i, np.mean(loss)))
 
         print("Finished training")
 
-play_only = config.getboolean('Atari', 'PLAY_ONLY')
 
-if play_only:
-    config['Learn']['PLAYER_N'] = '1'
-    config['Breakout']['ACTION_NOISE'] = '0.0' 
+time_prg = time.time()
+trainer = GymTrainer(int(config['Trainer']['PLAYER_N']))
 
-trainer = GymTrainer(int(config['Learn']['PLAYER_N']))
+for run in range(int(config['Trainer']['RUNS'])):
 
-my_p_adjust = float(config['Learn']['P_ADJUST_START'])
+    time_run = time.time()
+    print("Start to run #{} at {}...".format(run, time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())))
 
-for run in range(int(config['Learn']['RUNS'])):
+    trainer.play()
 
-    print("Start to run #{}...".format(run))
-    print("Set p_adjust to {:4.2f}".format(my_p_adjust))
+    trainer.train()
+    if run > 0 and run % int(config['Trainer']['SAVE_MODEL_PER_RUNS']) == 0:
+        trainer.pn.save()
 
-    trainer.play(render=play_only, p_adjust=my_p_adjust)
-
-    if not play_only:
-        trainer.train()
-        if run > 0 and run % int(config['Learn']['SAVE_MODEL_PER_RUNS']) == 0:
-            trainer.pn.save()
-
-    my_p_adjust = max(my_p_adjust * float(config['Learn']['P_ADJUST_DECAY']),
-                      float(config['Learn']['P_ADJUST_END']))
+    print("Finished run #{} for {} secs".format(run, int(time.time() - time_run)))
