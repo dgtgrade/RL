@@ -245,12 +245,17 @@ class GymPlayer:
             y, int(data.shape[1] / y),
             z, int(data.shape[2] / z)).mean(axis=(1, 3, 5))
 
-    def __init__(self, no, pn, ep_n=1):
+    def __init__(self, no, pn, ep_n=1, play_only=False):
 
         self.no = no
 
         #
         self.env = gym.make('Breakout-v0')
+        self.play_only = play_only
+
+        if self.play_only:
+            self.env = gym.wrappers.Monitor(self.env, 'tmp/Breakout-v0-experiment', force=True)
+
         self.pn = pn
 
         #
@@ -264,14 +269,14 @@ class GymPlayer:
 
         print("GymWorker #{:<2d} created".format(no))
 
-    def run_episodes(self, ep_n=1, play_only=False):
+    def run_episodes(self, ep_n=1):
 
         print("GymWorker #{:<2d} is running {} New Episodes...".format(self.no, ep_n))
-        thread = threading.Thread(target=self.run, args=(ep_n, play_only))
+        thread = threading.Thread(target=self.run, args=(ep_n,))
         thread.start()
         return thread
 
-    def run(self, ep_n=1, play_only=False):
+    def run(self, ep_n=1):
 
         pn = self.pn
 
@@ -303,7 +308,7 @@ class GymPlayer:
             for t in range(t_max):
 
                 #
-                if play_only:
+                if self.play_only:
                     self.env.render()
 
                 #
@@ -333,7 +338,7 @@ class GymPlayer:
                                 pn.training: False
                             })
 
-                if play_only:
+                if self.play_only:
                     action_noise = 0.0
                 elif ep % 2 == 0:
                     action_noise = float(config['Breakout']['ACTION_NOISE_0'])
@@ -349,8 +354,8 @@ class GymPlayer:
                 if ept - ept_start < 3:
                     action = 0
 
-                if self.no == 0:
-                    print(actions, action)
+                # if self.no == 0:
+                #     print(actions, action)
                 #
                 actions_done = np.zeros(action_n, dtype=np.bool)
                 actions_done[action] = True
@@ -561,25 +566,26 @@ class GymTrainer:
 
 time_prg = time.time()
 
-play_only = config.getboolean('Trainer', 'PLAY_ONLY')
+if config.getboolean('Trainer', 'PLAY_ONLY'):
 
-if play_only:
-    player_n = 1
+        my_pn = BreakoutPolicyNetwork()
+        my_gp = GymPlayer(0, my_pn)
+        while True:
+            my_gp.run()
+
 else:
-    player_n = int(config['Trainer']['PLAYER_N'])
 
-trainer = GymTrainer(player_n)
+    trainer = GymTrainer(int(config['Trainer']['PLAYER_N']))
 
-for run in range(int(config['Trainer']['RUNS'])):
+    for run in range(int(config['Trainer']['RUNS'])):
 
-    time_run = time.time()
-    print("Start to run #{} at {}...".format(run, time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())))
+        time_run = time.time()
+        print("Start to run #{} at {}...".format(run, time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())))
 
-    trainer.play(render=True)
+        trainer.play()
 
-    if not play_only:
         trainer.train()
         if run > 0 and run % int(config['Trainer']['SAVE_MODEL_PER_RUNS']) == 0:
             trainer.pn.save()
 
-    print("Finished run #{} for {} secs".format(run, int(time.time() - time_run)))
+        print("Finished run #{} for {} secs".format(run, int(time.time() - time_run)))
