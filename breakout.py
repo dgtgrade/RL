@@ -569,7 +569,7 @@ time_prg = time.time()
 if config.getboolean('Trainer', 'PLAY_ONLY'):
 
         my_pn = BreakoutPolicyNetwork()
-        my_gp = GymPlayer(0, my_pn)
+        my_gp = GymPlayer(0, my_pn, play_only=True)
         while True:
             my_gp.run()
 
