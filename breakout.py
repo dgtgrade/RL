@@ -83,9 +83,9 @@ class BreakoutPolicyNetwork:
             l_a00 = conv(l_prv, n_filter, 1, s=1, activate=activate, name=name)
             l_a01 = conv(l_a00, n_filter, 3, s=2, activate=activate, name=name)
             l_a10 = conv(l_prv, n_filter, 1, s=1, activate=activate, name=name)
-            l_a11 = conv(l_a10, n_filter, 6, s=2, activate=activate, name=name)
+            l_a11 = conv(l_a10, n_filter, 5, s=2, activate=activate, name=name)
             l_a20 = conv(l_prv, n_filter, 1, s=1, activate=activate, name=name)
-            l_a21 = conv(l_a20, n_filter, 9, s=2, activate=activate, name=name)
+            l_a21 = conv(l_a20, n_filter, 7, s=2, activate=activate, name=name)
 
             l_c = tf.concat(3, [l_a01, l_a11, l_a21])
 
@@ -133,21 +133,22 @@ class BreakoutPolicyNetwork:
 
         self.i_decayed_impacts = tf.placeholder(tf.float32, [None], name='i_decayed_impact')
 
-        self.loss = tf.reduce_mean(
-            self.i_decayed_impacts *
-            tf.reduce_sum(self.i_actions_done * (self.i_actions_target - self.l_output) ** 2, reduction_indices=[1]))
+        # self.loss = tf.reduce_mean(
+        #     self.i_decayed_impacts *
+        #     tf.reduce_sum(self.i_actions_done * (self.i_actions_target - self.l_output) ** 2,
+        #                   reduction_indices=[1]))
 
         # self.loss = tf.reduce_mean(
         #     self.i_decayed_impacts *
         #     tf.reduce_sum(self.i_actions_done * self.i_actions_target * -tf.log(self.l_output),
         #                   reduction_indices=[1]))
         #
-        # self.loss = tf.reduce_mean(
-        #     self.i_decayed_impacts *
-        #     tf.reduce_sum(self.i_actions_done * -tf.log(1 - 0.99*tf.abs(self.i_actions_target - self.l_output)),
-        #                   reduction_indices=[1]))
+        self.loss = tf.reduce_mean(
+            self.i_decayed_impacts *
+            tf.reduce_sum(self.i_actions_done * -tf.log(1 - 0.99*tf.abs(self.i_actions_target - self.l_output)),
+                          reduction_indices=[1]))
 
-        self.optimize = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.loss)
+        self.optimize = tf.train.RMSPropOptimizer(learning_rate=learning_rate).minimize(self.loss)
 
         #
         self.saver = tf.train.Saver()
@@ -263,14 +264,14 @@ class GymPlayer:
 
         print("GymWorker #{:<2d} created".format(no))
 
-    def run_episodes(self, ep_n=1):
+    def run_episodes(self, ep_n=1, play_only=False):
 
         print("GymWorker #{:<2d} is running {} New Episodes...".format(self.no, ep_n))
-        thread = threading.Thread(target=self.run, args=(ep_n,))
+        thread = threading.Thread(target=self.run, args=(ep_n, play_only))
         thread.start()
         return thread
 
-    def run(self, ep_n=1):
+    def run(self, ep_n=1, play_only=False):
 
         pn = self.pn
 
@@ -302,6 +303,10 @@ class GymPlayer:
             for t in range(t_max):
 
                 #
+                if play_only:
+                    self.env.render()
+
+                #
                 ept = self.ept
                 exs = self.exs
 
@@ -315,17 +320,22 @@ class GymPlayer:
                 frame_chg2 = frame_cur0 - frame_prv2
                 frame_chg3 = frame_cur0 - frame_prv3
 
-                [actions] = pn.sess.run(
-                    [pn.l_output],
-                    feed_dict={
-                        pn.l_obsrv_cur0: frame_cur0.reshape([1] + dim_input),
-                        pn.l_obsrv_chg1: frame_chg1.reshape([1] + dim_input),
-                        pn.l_obsrv_chg2: frame_chg2.reshape([1] + dim_input),
-                        pn.l_obsrv_chg3: frame_chg3.reshape([1] + dim_input),
-                        pn.training: False
-                    })
+                # no_cpu = 8
+                no_gpu = 2
+                with tf.device('/gpu:'+str(self.no % no_gpu)):
+                    [actions] = pn.sess.run(
+                            [pn.l_output],
+                            feed_dict={
+                                pn.l_obsrv_cur0: frame_cur0.reshape([1] + dim_input),
+                                pn.l_obsrv_chg1: frame_chg1.reshape([1] + dim_input),
+                                pn.l_obsrv_chg2: frame_chg2.reshape([1] + dim_input),
+                                pn.l_obsrv_chg3: frame_chg3.reshape([1] + dim_input),
+                                pn.training: False
+                            })
 
-                if ep % 2 == 0:
+                if play_only:
+                    action_noise = 0.0
+                elif ep % 2 == 0:
                     action_noise = float(config['Breakout']['ACTION_NOISE_0'])
                 else:
                     action_noise = float(config['Breakout']['ACTION_NOISE_1'])
@@ -339,8 +349,8 @@ class GymPlayer:
                 if ept - ept_start < 3:
                     action = 0
 
-                # if self.no == 0:
-                #     print(actions, action)
+                if self.no == 0:
+                    print(actions, action)
                 #
                 actions_done = np.zeros(action_n, dtype=np.bool)
                 actions_done[action] = True
@@ -432,11 +442,11 @@ class GymTrainer:
         self.avg_reward_history = []
         self.max_reward_history = []
 
-    def play(self):
+    def play(self, render=False):
 
         threads = []
         for i, gp in enumerate(self.gps):
-            threads.append(gp.run_episodes(int(config['Trainer']['EPISODES_PER_RUN'])))
+            threads.append(gp.run_episodes(int(config['Trainer']['EPISODES_PER_RUN']), render))
 
         for t in threads:
             t.join()
@@ -550,17 +560,26 @@ class GymTrainer:
 
 
 time_prg = time.time()
-trainer = GymTrainer(int(config['Trainer']['PLAYER_N']))
+
+play_only = config.getboolean('Trainer', 'PLAY_ONLY')
+
+if play_only:
+    player_n = 1
+else:
+    player_n = int(config['Trainer']['PLAYER_N'])
+
+trainer = GymTrainer(player_n)
 
 for run in range(int(config['Trainer']['RUNS'])):
 
     time_run = time.time()
     print("Start to run #{} at {}...".format(run, time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())))
 
-    trainer.play()
+    trainer.play(render=True)
 
-    trainer.train()
-    if run > 0 and run % int(config['Trainer']['SAVE_MODEL_PER_RUNS']) == 0:
-        trainer.pn.save()
+    if not play_only:
+        trainer.train()
+        if run > 0 and run % int(config['Trainer']['SAVE_MODEL_PER_RUNS']) == 0:
+            trainer.pn.save()
 
     print("Finished run #{} for {} secs".format(run, int(time.time() - time_run)))
